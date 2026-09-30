@@ -1,0 +1,168 @@
+% ---------------------------------------------------------------------------
+% references.bib — conformal-mpc-portfolio
+%
+% Every entry below was verified against a live registry before being written:
+% Crossref REST API (api.crossref.org) for the journal/conference DOIs, the arXiv
+% API for the preprint, and PMLR citation_* metadata for the L4DC paper. Author
+% lists, venues, volume/issue/pages and years in this file are transcribed from
+% those responses, not from memory.
+%
+% To re-verify every entry in one command:
+%     for d in $(grep -o 'doi *= *{[^}]*}' references.bib | sed 's/.*{//;s/}//'); do
+%         curl -s -H "Accept: application/json" https://api.crossref.org/works/$d
+%     done
+%
+% NOT YET CITED IN TEXT. This file is a starting bibliography, not evidence of
+% related-work coverage. Before submission, each entry must be read and positioned
+% explicitly against this project's contribution. In particular Chee et al. (2024)
+% is close enough to this work that a reviewer will ask why it is not a baseline.
+% ---------------------------------------------------------------------------
+
+% ============================ adaptive conformal ============================
+
+@inproceedings{gibbs2021adaptive,
+  title     = {Adaptive Conformal Inference Under Distribution Shift},
+  author    = {Gibbs, Isaac and Cand{\`e}s, Emmanuel J.},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume    = {34},
+  pages     = {1660--1672},
+  year      = {2021},
+  publisher = {Curran Associates, Inc.},
+  doi       = {10.48550/arXiv.2106.00170},
+  eprint    = {2106.00170},
+  archivePrefix = {arXiv},
+  primaryClass  = {stat.ME},
+  note      = {NeurIPS 2021 Oral. Source of the ACI update
+               $\alpha_{t+1} = \alpha_t + \gamma(\alpha - \mathrm{err}_t)$
+               implemented in \texttt{src/conformal.py}.}
+}
+
+% ================= conformal uncertainty meets MPC (closest work) =============
+
+@inproceedings{chee2024uncertainty,
+  title     = {Uncertainty Quantification and Robustification of Model-Based
+               Controllers Using Conformal Prediction},
+  author    = {Chee, Kong Yao and Silva, Thales C. and Hsieh, M. Ani and
+               Pappas, George J.},
+  booktitle = {Proceedings of the 6th Annual Learning for Dynamics \& Control
+               Conference},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {242},
+  pages     = {528--540},
+  year      = {2024},
+  publisher = {PMLR},
+  url       = {https://proceedings.mlr.press/v242/chee24a.html},
+  note      = {Conformal uncertainty regions driving dynamic constraint tightening
+               in model-based control, in continuous control rather than portfolio
+               allocation. The nearest prior work to this project; must be
+               discussed explicitly in related work.}
+}
+
+% ============================ constraint tightening =========================
+
+@inproceedings{richards2006robust,
+  title     = {Robust Stable Model Predictive Control with Constraint Tightening},
+  author    = {Richards, Arthur and How, Jonathan P.},
+  booktitle = {2006 American Control Conference},
+  pages     = {6},
+  year      = {2006},
+  doi       = {10.1109/ACC.2006.1656440},
+  note      = {Tightening derived from disturbance bounds. The convention in
+               \texttt{src/mpc.py:tighten\_limits} follows this family; the
+               difference here is that the amount is driven by a calibrated
+               online uncertainty estimate rather than a fixed bound.}
+}
+
+% ============================== portfolio theory =============================
+
+@article{markowitz1952portfolio,
+  title   = {Portfolio Selection},
+  author  = {Markowitz, Harry},
+  journal = {The Journal of Finance},
+  volume  = {7},
+  number  = {1},
+  pages   = {77--91},
+  year    = {1952},
+  doi     = {10.1111/j.1540-6261.1952.tb01525.x},
+  note    = {Basis of the \texttt{markowitz} baseline.}
+}
+
+@article{demiguel2009optimal,
+  title   = {Optimal Versus Naive Diversification: How Inefficient is the
+             $1/N$ Portfolio Strategy?},
+  author  = {DeMiguel, Victor and Garlappi, Lorenzo and Uppal, Raman},
+  journal = {The Review of Financial Studies},
+  volume  = {22},
+  number  = {5},
+  pages   = {1915--1953},
+  year    = {2009},
+  doi     = {10.1093/rfs/hhm075},
+  note    = {Why $1/N$ is a genuinely hard benchmark to beat. Directly motivates
+             adding \texttt{equal\_weight} and \texttt{equal\_weight\_voltarget}
+             before building any adaptive layer, and is the honest context for
+             the finding that vol-targeting beats the full MPC on tails.}
+}
+
+% ============================== risk measurement ============================
+
+@article{rockafellar2000optimization,
+  title   = {Optimization of Conditional Value-at-Risk},
+  author  = {Rockafellar, R. Tyrrell and Uryasev, Stanislav},
+  journal = {The Journal of Risk},
+  volume  = {2},
+  number  = {3},
+  pages   = {21--41},
+  year    = {2000},
+  doi     = {10.21314/JOR.2000.038},
+  note    = {Definition and convex formulation of CVaR. The CVaR 5\% column in
+             every results table is this measure.}
+}
+
+% ============================ covariance estimation =========================
+
+@article{ledoit2004well,
+  title   = {A Well-Conditioned Estimator for Large-Dimensional Covariance Matrices},
+  author  = {Ledoit, Olivier and Wolf, Michael},
+  journal = {Journal of Multivariate Analysis},
+  volume  = {88},
+  number  = {2},
+  pages   = {365--411},
+  year    = {2004},
+  doi     = {10.1016/S0047-259X(03)00096-4},
+  note    = {Shrinkage target for the covariance fed to the MPC in
+             \texttt{src/estimators.py}.}
+}
+
+% ================================== regime =================================
+
+@article{hamilton1989new,
+  title   = {A New Approach to the Economic Analysis of Nonstationary Time Series
+             and the Business Cycle},
+  author  = {Hamilton, James D.},
+  journal = {Econometrica},
+  volume  = {57},
+  number  = {2},
+  pages   = {357--384},
+  year    = {1989},
+  doi     = {10.2307/1912559},
+  note    = {Regime-switching precedent for the calm/stress layer in
+             \texttt{src/regime.py}. This repo uses a far simpler rolling-volatility
+             detector, which is a deviation and should be described as such.}
+}
+
+% =============================== bootstrap ==================================
+
+@article{politis1994stationary,
+  title   = {The Stationary Bootstrap},
+  author  = {Politis, Dimitris N. and Romano, Joseph P.},
+  journal = {Journal of the American Statistical Association},
+  volume  = {89},
+  number  = {428},
+  pages   = {1303--1313},
+  year    = {1994},
+  doi     = {10.1080/01621459.1994.10476870},
+  note    = {Geometric-block resampling used for all confidence intervals in
+             \texttt{src/bootstrap.py}. The i.i.d. bootstrap is not valid for
+             dependent return series, which is why Sharpe intervals here are
+             roughly $\pm 0.9$ wide rather than much narrower.}
+}

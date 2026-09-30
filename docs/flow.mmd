@@ -1,0 +1,66 @@
+%% Conformal-calibrated robust MPC — closed-loop dataflow
+%% Source of truth for the architecture; tests/test_figures.py checks the
+%% node ids here against docs/figures/block_diagram.png so the two cannot drift.
+%% Prose version: README.md -> 'The pipeline'.
+
+flowchart TD
+    subgraph DATA[" Market data — the only exogenous input "]
+        PX["adjusted close<br/>10 NSE large caps"]
+        RET[("returns<br/>daily, 2012-01-02 → 2025-12-30")]
+        PX --> RET
+    end
+    subgraph DAY[" Day d decision — uses returns[:d] and nothing later "]
+        HIST["history window<br/>lookback L = 60 days"]
+        FOR["RidgeForecaster<br/>walk-forward, retrain every 63d<br/>⟨near-noise: corr ≈ −0.035⟩"]
+        ENS["DisagreementEnsemble<br/>ridge · historical mean<br/>momentum · GRU if torch"]
+        COV["shrunk covariance<br/>Ledoit–Wolf style"]
+        ACI["AdaptiveConformal<br/>per-asset α_t<br/>α_t+1 = α_t + γ(α − err_t)"]
+        HW["half-widths hw<br/>quantile of &#124;y − ŷ&#124; at level 1 − α_t"]
+        RHO["uncertainty ratio ρ_t<br/>fixed β: hw / median(hw)<br/>selfcal: √(w-ratio × d-ratio)"]
+        TIGHT["tighten_limits<><br/><b>exposure_cap = E_max / (1 + β·(ρ_t − 1))</b><br/>vol_cap likewise"]
+        BETA["BetaState<br/>β_t+1 = max(0, β_t + η(breach_t − δ))<br/>breach_t = 1{net_t < −0.02}"]
+        REG["VolRegimeDetector<br/>calm / stress market mood<br/>scales γ and caps exposure"]
+        MU["expected return μ<br/>μ_shrink·ŷ + (1 − μ_shrink)·mean<br/>μ_shrink = 0.05"]
+        QP["MPC — convex QP (CVXPY)<br/>min Σ q·t + ρ_s‖s‖² + λ‖Δu‖²<br/>st. t_j ≥ θ_ref − wᵀx̄_j<br/>   exposure, vol, Δu, budget"]
+        W["weights w_d<br/>target for day d+1"]
+    end
+    subgraph EXEC[" Execution "]
+        TURN["turnover ‖w_d − w_d−1‖₁"]
+        COST["transaction cost<br/>10 bps one-way"]
+        REAL(("realised net return r_net,d+1<br/>w_dᵀr_d+1 − cost"))
+    end
+    RET --> HIST
+    HIST --> FOR
+    HIST --> ENS
+    HIST --> COV
+    FOR --> ACI
+    ACI --> HW
+    HW --> RHO
+    ENS --> RHO
+    RHO --> TIGHT
+    BETA --> TIGHT
+    FOR --> MU
+    HIST --> MU
+    COV --> QP
+    HW --> QP
+    MU --> QP
+    TIGHT --> QP
+    REG -. "fixed-β strategies only<br/>(selfcal bypasses this)" .-> TIGHT
+    REG -.-> QP
+    QP --> W --> TURN --> COST --> REAL
+    REAL -. "realised return:<br/>conformal score · breach signal" .-> ACI
+    REAL -. "breach_t" .-> BETA
+    REAL -. "w_d, r_d+1" .-> RET
+    classDef core fill:#fff3cd,stroke:#d39e00,stroke-width:3px,color:#000
+    classDef learn fill:#d1ecf1,stroke:#0c5460,stroke-width:2px,color:#000
+    classDef weak fill:#f8d7da,stroke:#842029,stroke-width:2px,color:#000,stroke-dasharray:4 3
+    classDef exec  fill:#d4edda,stroke:#155724,stroke-width:2px,color:#000
+    classDef plain fill:#f8f9fa,stroke:#adb5bd,stroke-width:1px,color:#000
+    class TIGHT,RHO core
+    class BETA,ENS,ACI learn
+    class FOR weak
+    class COST,REAL,TURN exec
+    class PX,RET,HIST,COV,HW,MU,QP,W,REG plain
+    classDef note fill:#ffffff,stroke:#6c757d,stroke-width:1px,color:#000,font-size:11px
+    NOTE["<b>What the evidence supports</b><br/>calibration works (coverage 0.898 vs 0.90)<br/>tightening helps <i>within</i> the MPC family<br/>a vol-targeted 1/N baseline beats it on tails"]
+    class NOTE note

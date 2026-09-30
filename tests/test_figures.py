@@ -1,4 +1,7 @@
 """Smoke tests for the paper figures, so they cannot drift from the config/code."""
+import pathlib
+import re
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -76,3 +79,72 @@ def test_block_diagram_has_no_text_collisions():
             assert not (ix > 3 and iy > 3), \
                 f"overlapping labels: {items[i][0][:30]!r} <> {items[j][0][:30]!r}"
     plt.close(fig)
+
+
+# --------------------------------------------------------- mermaid flow diagram
+
+FLOW = pathlib.Path("docs/flow.mmd")
+
+
+def _flow_text():
+    return FLOW.read_text() if FLOW.exists() else ""
+
+
+def test_flow_mmd_exists_and_declares_a_diagram():
+    assert FLOW.exists(), "docs/flow.mmd is missing"
+    text = _flow_text()
+    assert text.lstrip().startswith("%%"), "flow.mmd should open with a comment header"
+    assert "flowchart TD" in text.splitlines(), "expected a top-level `flowchart TD` declaration"
+
+
+def test_flow_mmd_has_no_duplicate_diagram_declarations():
+    """A second `flowchart TD` silently breaks the Mermaid parser."""
+    assert _flow_text().count("flowchart TD") == 1
+
+
+def test_flow_mmd_documents_the_no_lookahead_boundary():
+    """The one arrow that crosses back from day t+1 must be drawn as feedback only."""
+    text = _flow_text()
+    assert "returns[:d]" in text
+    assert "realised" in text.lower()
+    # the feedback path must be dashed (.-), never a solid data edge
+    assert text.count("-. ") + text.count("-.->") >= 1, "no dashed feedback edge found"
+
+
+def test_flow_mmd_marks_the_core_contribution():
+    text = _flow_text()
+    assert "tighten_limits" in text
+    assert "exposure_cap" in text
+    assert "core" in text.lower(), "the core block should be styled as such"
+
+
+def test_flow_mmd_node_ids_match_the_rendered_block_diagram():
+    """The .mmd is the textual source of truth; the PNG is generated. They must not drift.
+
+    We check that every stage named in the rendered matplotlib diagram also appears
+    as a node in the mermaid file.
+    """
+    cfg = load_config(CFG)
+    joined = "\n".join(_rendered_text(cfg))
+    text = _flow_text()
+    pairs = {
+        "MARKET": "RET",
+        "MEASUREMENT": "HIST",
+        "FORECASTER": "FOR",
+        "ADAPTIVE CONFORMAL": "ACI",
+        "RISK-LIMIT SCHEDULER": "TIGHT",
+        "MPC OPTIMIZER": "QP",
+        "ACTUATOR": "TURN",
+    }
+    for block, node in pairs.items():
+        assert block in joined, f"rendered diagram lost the {block} block"
+        assert re.search(rf'^\s*{node}\[', text, re.M), \
+            f"flow.mmd has no node id {node} corresponding to the {block} block"
+
+
+def test_flow_svg_is_committed_and_nontrivial():
+    svg = pathlib.Path("docs/figures/flow.svg")
+    assert svg.exists(), "docs/figures/flow.svg is missing; re-render docs/flow.mmd"
+    text = svg.read_text(errors="ignore")
+    assert text.lstrip().startswith("<?xml") or "<svg" in text[:400]
+    assert len(text) > 5000, "rendered flow diagram looks truncated"

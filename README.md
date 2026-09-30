@@ -51,30 +51,46 @@ the paper; `AGENTS.md` rule: *reported numbers come from real NSE prices only.*
 
 ## The pipeline
 
+```mermaid
+%% Canonical source: docs/flow.mmd — edit that file, then re-render.
+%% Prose explanation follows the diagram.
+flowchart TD
+    RET["returns[:d]<br/>10 NSE large caps"] --> HIST["history window<br/>lookback L = 60 days"]
+
+    HIST --> FOR["RidgeForecaster<br/>walk-forward, retrain every 63d<br/>corr with realized ≈ −0.035"]
+    HIST --> ENS["DisagreementEnsemble<br/>ridge · historical mean<br/>momentum · GRU if torch"]
+    HIST --> COV["shrunk covariance<br/>Ledoit–Wolf style"]
+
+    FOR --> ACI["AdaptiveConformal<br/>per-asset α_t<br/>α_t+1 = α_t + γ(α − err_t)"]
+    ACI --> HW["half-widths hw<br/>quantile of |y − ŷ| at level 1 − α_t"]
+
+    HW --> RHO["uncertainty ratio ρ_t"]
+    ENS --> RHO
+    RHO --> TIGHT["tighten_limits — CORE<br/>exposure_cap = E_max / (1 + β·(ρ_t − 1))"]
+    BETA["BetaState — selfcal only<br/>β_t+1 = max(0, β_t + η(breach_t − δ))"] --> TIGHT
+
+    FOR --> MU["expected return μ<br/>μ_shrink·ŷ + (1 − μ_shrink)·mean"]
+    HIST --> MU
+    COV --> QP["MPC — convex QP (CVXPY)"]
+    HW --> QP
+    MU --> QP
+    TIGHT --> QP
+    QP --> W["weights w_d"] --> TURN["turnover"] --> COST["cost 10 bps"] --> REAL["realised net return"]
+
+    REAL -. "conformal score · breach signal" .-> ACI
+    REAL -. "β_t update" .-> BETA
+
+    classDef core fill:#fff3cd,stroke:#d39e00,stroke-width:3px,color:#000
+    classDef weak fill:#f8d7da,stroke:#842029,stroke-width:2px,color:#000,stroke-dasharray:4 3
+    class TIGHT,RHO core
+    class FOR weak
 ```
-                        ┌─────────────────────────── daily loop, returns[:d] only ───────────────────────────┐
-                        │                                                                              │
-  adjusted close  ──▶  returns[:d]  ──▶  RidgeForecaster  ──▶  ŷ_d                                    │
-  (10 NSE names)          60d window      (walk-forward)        │                                    │
-                                                     ┌──────────┴──────────┐                             │
-                                                     ▼                     ▼                             │
-                                          AdaptiveConformal        shrunk covariance                    │
-                                          per-asset α_t  ──▶  half-widths  ──┐                          │
-                                                     │                       ▼                          │
-                                          ┌──────────┴──────────┐  MPC (CVXPY QP)                     │
-                                          │  REGIME              │  tightened limits                  │
-                                          │  calm / stress       │  exposure + vol caps               │
-                                          └──────────┬──────────┘           │                            │
-                                                     ▼                      ▼                            │
-                                              β_t  ────────────▶  tighten_limits()  ──▶  w_d            │
-                                          (learned, selfcal)         (core)                          │
-                                                                                    │               │
-                                                                                    ▼               │
-                                                                          turnover  ──▶  r_d+1         │
-                                                                              (10 bps)              │
-                                                                                                    │
-                        └────────────────────────────────────────────────────────────────────────────┘
-```
+
+The full diagram — including the regime layer, the execution path, and the complete
+feedback loop — lives in [`docs/flow.mmd`](docs/flow.mmd) as editable Mermaid source,
+with a rendered copy at `docs/figures/flow.svg`.
+`tests/test_figures.py` checks that the node ids there still match the seven blocks in
+`docs/figures/block_diagram.png`, so the two renderings cannot silently drift apart.
 
 **Core mechanism — `tighten_limits` in `src/mpc.py`.** Given an uncertainty ratio `ρ_t ≥ 1`
 (half-widths relative to their trailing median), the exposure and volatility caps are shrunk:
@@ -324,7 +340,10 @@ docs/
   experiment_log.md         every run, every bug, every null result
   stress_definition.md      the independent stress rule, with rejected alternatives
   hypothesis.md             the one falsifiable claim under test
-  figures/block_diagram.png
+  flow.mmd                  editable Mermaid source for the pipeline diagram
+  figures/block_diagram.png generated from the live config
+  figures/flow.svg          rendered from flow.mmd
+references.bib              9 entries, each verified against Crossref / arXiv / PMLR
 ```
 
 ---
@@ -345,12 +364,13 @@ Every run writes `results/<timestamp>-*/` with its own `config.yaml` snapshot. O
 git-ignored by design; the numbers in this README are the record until you choose otherwise
 (see *Known gaps* below).
 
-**Known gaps.** Nothing here has a formal citation yet — `references.bib` does not exist, and
-the related-work positioning in `docs/` is currently prose only. The related work this builds
-on includes Gibbs & Candès (2021) on adaptive conformal inference, Candes et al. on uncertainty-
-set-based MPC, Politis & Romano (1994) on the stationary bootstrap, Åström & Wittenmark on
-adaptive control, and the robust/chance-constrained MPC literature. **Add these properly
-before submission** — do not cite from memory.
+**References.** [`references.bib`](references.bib) holds nine entries. Every one was verified
+against a live registry — Crossref for the journal and conference DOIs, the arXiv API for the
+preprint, PMLR `citation_*` metadata for the L4DC paper — and the file carries a one-liner to
+re-run that verification. The most important entry is **Chee et al. (2024)**, L4DC: it also
+drives constraint tightening from conformal uncertainty, in continuous control rather than
+portfolio allocation. It is the nearest prior work to this project and a reviewer will ask why
+it is not a baseline. Position it explicitly before submission.
 
 ---
 

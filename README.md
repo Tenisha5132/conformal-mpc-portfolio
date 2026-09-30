@@ -1,18 +1,31 @@
-# conformal-mpc-portfolio
+# Self-Calibrating Uncertainty-Aware MPC for Tail-Risk Budgeting in Portfolios
 
-Conformal-calibrated robust MPC for risk-aware portfolio allocation.
+**Manuscript:** [`paper.tex`](paper.tex) — IEEE journal format, title retained exactly.
+Build with `pdflatex paper.tex && bibtex paper && pdflatex paper.tex && pdflatex paper.tex`.
+Prose notes and the same numbers live in [`docs/paper.md`](docs/paper.md).
 
 A learned return forecaster feeds adaptive conformal prediction intervals; those intervals
 drive **uncertainty-dependent constraint tightening** inside a CVXPY model-predictive
-controller, which re-solves a convex programme every trading day. When forecast uncertainty
-spikes, the risk limits tighten automatically.
+controller, which re-solves a convex programme every trading day and imposes a hard daily
+CVaR(5%) budget via the Rockafellar–Uryasev epigraph. When forecast uncertainty spikes, the
+risk limits tighten automatically.
 
-> **The honest headline: this paper does not show that forecasting helps.** The daily ridge
-> forecaster has no measurable skill on these assets (mean per-asset correlation with
-> realized returns ≈ −0.035). What the conformal + tightening + regime layer demonstrates is
-> narrower and, we think, more useful: *it makes an unreliable forecaster safe to put in the
-> loop.* A stronger, much simpler baseline (volatility-targeted equal weight) matches or beats
-> the full controller on tails. See [What this does not show](#what-this-does-not-show).
+> **The honest headline: this project does not show that forecasting helps, and it does not
+> show that the MPC beats a simple risk rule.** Four hypotheses of ours are falsified on
+> purpose, and the negative results are the contribution:
+> 1. The forecaster is a **pure drag** — removing it leaves risk unchanged (`p = 0.606`) at
+>    one quarter of the turnover.
+> 2. The MPC does **not** win in volatility-jump regimes (**1/4** real events, mean CVaR worse).
+> 3. A forward-looking GARCH signal, given to the *baseline too* so the comparison is at
+>    **matched information**, significantly **improves the simple rule** (`p = 0.001`) and
+>    significantly **degrades the MPC** (`p = 0.001`). The MPC dilutes a good signal.
+> 4. The MPC's tail advantage is **not** de-risking — at matched exposure it holds up to
+>    **1.18× more risk** for less return.
+>
+> What survives is narrower and defensible: **adding a tail-risk budget to this allocator
+> improves its tail** (`+0.00159`, CI `[0.00101, 0.00214]`, `p = 0.001`), replicated under a
+> forecast-ablation control. That is a mechanism claim, not a superiority claim. See
+> [What this does not show](#what-this-does-not-show).
 
 ---
 
@@ -23,6 +36,9 @@ spikes, the risk limits tighten automatically.
 - [Data and splits](#data-and-splits)
 - [The strategy ladder](#the-strategy-ladder)
 - [Results](#results)
+- [The matched-information test](#the-matched-information-test)
+- [Exposure-matched control](#exposure-matched-control)
+- [Volatility-jump regime study](#volatility-jump-regime-study)
 - [Stress-conditional analysis](#stress-conditional-analysis)
 - [Self-calibration ablation](#self-calibration-ablation)
 - [What this does not show](#what-this-does-not-show)
@@ -39,7 +55,7 @@ spikes, the risk limits tighten automatically.
 ```bash
 make setup && source .venv/bin/activate
 
-make test        # 67 tests
+make test        # 130 tests
 make synthetic   # offline smoke test on SIMULATED data — never reportable
 make val         # real NSE data (10 tickers), validation period 2016–2019
 ```
@@ -166,7 +182,17 @@ Each rung adds exactly one element, so its contribution is measurable. `ALL` in
 | `mpc_selfcal` | learned `β_t` + ensemble disagreement |
 | **`mpc_tailbudget`** | **+ hard CVaR(5%) tail-risk budget (title mechanism)** |
 | `mpc_tailbudget_nofc` | the same, **forecast removed** — isolating control |
+| `mpc_tailbudget_fwdvol` | budget denominated in GARCH forward vol, not trailing vol |
+| `equal_weight_voltarget_fwd` | **matched-information scalar rule** — same GARCH signal as the MPC above |
 | `mpc_full` | + regime layer |
+
+`mpc_tailbudget` **subclasses** `mpc_selfcal` (`src/strategies.py:204`), so the two differ by
+exactly one constraint: the CVaR budget is **added to** the same uncertainty-driven exposure
+cap, not substituted for it. That is what makes their comparison a clean instrument test.
+
+`equal_weight_voltarget_fwd` and `mpc_tailbudget_fwdvol` exist specifically as a
+**matched-information pair**. Giving the same forward signal to both rules out the objection
+that a "win" merely shows a good signal beating no signal.
 
 ---
 
@@ -189,18 +215,23 @@ intervals are 95% stationary block bootstrap (2000 resamples, mean block 10 days
 | `mpc_selfcal` | 1.091 | [0.12, 2.09] | −0.0166 | −15.2% |
 | **`mpc_tailbudget`** | **1.196** | [0.21, 2.20] | **−0.0150** | **−14.6%** |
 | `mpc_tailbudget_nofc` | 1.265 | [0.23, 2.30] | −0.0148 | −14.7% |
+| `mpc_tailbudget_fwdvol` | 1.241 | — | −0.0156 | −15.5% |
+| **`equal_weight_voltarget_fwd`** | 1.299 | — | **−0.0117** | **−9.4%** |
 | `mpc_full` | 1.160 | [0.18, 2.16] | −0.0151 | −13.6% |
+
+`equal_weight_voltarget_fwd` has the best tail of every strategy tested. See
+[The matched-information test](#the-matched-information-test).
 
 **No Sharpe difference is statistically significant.** Bootstrap Sharpe noise is roughly ±0.9;
 every observed gap is 0.1–0.4. The significant effects are all in risk:
 
 - `mpc_full` − `mpc_naive`: CVaR **+0.002**, paired bootstrap `p = 0.001`. The core layer helps
   *within* the MPC family.
-- `mpc_tailbudget` − `mpc_selfcal`: CVaR **+0.0016**, paired bootstrap `p = 0.001`
-  (CI [0.0010, 0.0021]). These two differ by exactly one line — a hard CVaR budget in place
-  of a scalar exposure cap — so this is the cleanest evidence that *targeting the tail
-  specifically* beats shrinking the mean. Sharpe (+0.11, p = 0.24) and maxDD (p = 0.18) do not
-  differ significantly.
+- `mpc_tailbudget` − `mpc_selfcal`: CVaR **+0.00159**, paired bootstrap `p = 0.001`
+  (CI [0.00101, 0.00214]). `mpc_tailbudget` **subclasses** `mpc_selfcal`, so these two differ
+  by exactly one constraint — a hard CVaR budget *added to* the same uncertainty-driven
+  exposure cap — so this is the cleanest evidence that *budgeting the tail* helps. Sharpe
+  (+0.11, p = 0.24) and maxDD (p = 0.18) do not differ significantly.
 - versus `equal_weight_voltarget`, `mpc_fc_tight` is **worse** on CVaR (p = 0.004), and
   `mpc_tailbudget` is still behind it (diff −0.0019, **p = 0.082**, not significant). The
   simple volatility-targeted baseline remains the hardest thing to beat on tails.
@@ -212,7 +243,7 @@ the forecast. It keeps the budget, `beta_t`, the ensemble, the scenarios, and th
 | nofc vs … | CVaR diff | p | Sharpe diff | p |
 |---|---|---|---|---|
 | `mpc_tailbudget` (forecast on) | +0.00025 | 0.61 | +0.069 | 0.62 |
-| `mpc_selfcal` (exposure cap) | **+0.00185** | **0.001** | +0.174 | 0.17 |
+| `mpc_selfcal` (exposure cap, no budget) | **+0.00185** | **0.001** | +0.174 | 0.17 |
 | `equal_weight_voltarget` | −0.0017 | 0.14 | −0.037 | 0.95 |
 
 Removing the forecast changes **nothing** statistically (every p > 0.6) while cutting turnover
@@ -223,6 +254,114 @@ even with the forecast removed, the MPC stack **still does not significantly bea
 
 **Conformal calibration works.** ACI empirical coverage is **0.8984** against a 0.90 target on
 this validation window; per-asset `α_t` settles in [0.066, 0.121] around a mean of 0.0925.
+
+**The budget is live, not slack.** A budget that never binds is not a result, so we report the
+whole utilization distribution (`CVaR_used / budget` over 983 days): mean **0.869**, median
+**0.985**, max **0.995**, and **zero violations**. It binds (utilization ≥ 0.98) on **54.2%**
+of days. `vol_mult = 1.6` is calibrated on **train only** from the observed realized
+CVaR/vol ratio (~2.0–2.17) so the constraint is live at full investment.
+
+---
+
+## The matched-information test
+
+The strongest result in the project, and the one that settles the most. If the MPC loses
+because its budget is denominated in *trailing* volatility, the obvious remedy is a
+forward-looking risk signal — so we built one and then **gave it to the baseline too**.
+
+`src/fwdvol.py` is a jump-augmented GARCH(1,1) with Student-*t* innovations, fitted by
+maximum likelihood via SciPy (no new dependency). The conditional variance
+`h_{t+1} = ω + α·ε_t² + β·h_t` reacts to the newest shock, which a 60-day trailing window
+cannot do at full speed.
+
+| comparison (paired bootstrap, 2000 resamples) | ΔCVaR | 95% CI | p |
+|---|---|---|---|
+| fwd-vol scalar − trailing scalar | **+0.00145** | [0.00087, 0.00195] | **0.001** |
+| … same, max drawdown | **+0.01296** | [0.00146, 0.03557] | **0.028** |
+| MPC (fwd vol) − fwd-vol scalar | **−0.00395** | [−0.00692, −0.00143] | **0.001** |
+| MPC (no fc) − fwd-vol scalar | −0.00313 | [−0.00583, −0.00086] | 0.005 |
+| `mpc_tailbudget` − fwd-vol scalar | −0.00338 | [−0.00596, −0.00129] | 0.002 |
+| MPC (fwd vol) − trailing scalar | −0.00250 | [−0.00533, +0.00000] | 0.051 *(ns)* |
+
+Both directions are significant and they point **opposite ways**. The forward signal makes
+the **simple** rule significantly better, and the MPC consuming that *same signal* is
+significantly worse. The MPC **dilutes** a good signal. The best risk controller in this
+study is the dumbest one.
+
+> **Do not quote a correlation coefficient for this signal.** The standalone 1-step-ahead
+> `corr(fwdvol, |r_{t+1}|)` is not robust: Pearson 0.240/0.184 at fit window 400 but
+> 0.091/0.063 at 500, and at the *configured* `lookback: 1000` it cannot be measured on train
+> at all (train is 982 days). An earlier draft quoted ".188 vs .170"; that is **retracted**.
+> Argue from the decision-level matched-information test only.
+
+---
+
+## Exposure-matched control
+
+A strategy that simply holds less risk always looks better on a downside-tail statistic. That
+is not evidence of skill, so we measured realized mean gross exposure from the backtest
+weights and rescaled every strategy to a common exposure (`experiments/exposure_matched.py`).
+
+| strategy | exposure | ratio | Sharpe | CVaR | maxDD |
+|---|---|---|---|---|---|
+| `equal_weight_voltarget_fwd` | 0.686 | 1.00× | 1.299 | **0.0117** | **−9.4%** |
+| `equal_weight_voltarget` | 0.767 | 1.12× | **1.302** | **0.0117** | −9.6% |
+| `mpc_tailbudget_nofc` | 0.767 | 1.12× | 1.265 | 0.0132 | −13.2% |
+| `mpc_tailbudget_fwdvol` | 0.784 | 1.14× | 1.241 | 0.0137 | −13.6% |
+| `mpc_tailbudget` | 0.812 | **1.18×** | 1.196 | 0.0127 | −12.5% |
+
+The de-risking explanation is falsified in the direction that matters: the MPC does **not**
+hold less risk, it holds up to **1.18× more**, and at matched exposure the baseline is still
+better on CVaR, Sharpe, *and* drawdown with indistinguishable volatility. Between 11% and 69%
+of the raw CVaR gap was an exposure artifact; the remainder still favours the baseline. The
+MPC takes more risk for less return.
+
+*(Rescaling is an analytical normalization, not a tradeable backtest — turnover and cost do
+not rescale consistently, so no cost conclusion is drawn here. And `cvar_daily` is a negative
+loss magnitude: **more negative is worse**.)*
+
+---
+
+## Volatility-jump regime study
+
+The trailing-vol denominator suggests a regime where the MPC *should* win: a volatility jump
+that mean-reverts, where a slow estimator is most exposed. We tested it and it is false.
+
+`experiments/regime_test.py` builds a block-regime fixture (calm → spike → decay, zero
+momentum so predictability cannot confound the risk control). **On the fixture built to
+favour the MPC, the volatility-targeting rule still wins end to end.**
+
+`experiments/jump_events.py` then enumerates *every* qualifying real event in train+validation
+with the rule fixed before any strategy result was inspected: a rolling 20-day volatility rising
+≥ 2× the preceding 60-day mean, then falling ≥ 30% from peak within 60 days, de-clustered with
+a 140-day cooldown.
+
+| event peak | jump | `voltarget` | `voltarget_fwd` | `mpc_nofc` | `mpc_fwdvol` |
+|---|---|---|---|---|---|
+| 2013-09-13 | ×2.00 | 0.0173 | 0.0189 | 0.0237 | 0.0246 |
+| 2015-09-09 | ×2.00 | 0.0187 | **0.0179** | **0.0175** | 0.0178 |
+| 2017-11-08 | ×2.02 | 0.0097 | **0.0091** | 0.0148 | 0.0162 |
+| 2018-10-29 | ×2.10 | 0.0165 | **0.0156** | 0.0287 | 0.0298 |
+
+The forward signal helps the scalar rule in **3/4**; the MPC beats its matched scalar in only
+**1/4**, with mean CVaR worse by +0.0058 (no fc) and +0.0067 (fwd vol). The largest real
+train+val window (2018-07-04 → 2019-05-02, jump ×2.16) is reported separately as an *n*=1
+case study, where the scalar rule reaches Sharpe 1.729 / CVaR 0.0134 against
+`mpc_tailbudget` 1.342 / 0.0212 — the MPC loses decisively even in the regime built for it.
+
+With 4 events we cannot prove a null; the direction is consistent with the matched-information
+result above.
+
+> **Selection trap worth recording.** The largest volatility jump in the *full* sample is
+> ×6.94, peaking March 2020 — the COVID crash, in the **sealed test period**. An unbounded
+> search would silently select the one event most likely to flatter the method, from data we
+> agreed never to touch. The largest jump available in train+validation is only ×2.10. The
+> search therefore takes a **hard bound clipped to the validation end**, and regression tests
+> fail if that bound is removed (`tests/test_regime_test.py`, `tests/test_jump_events.py`).
+
+> **Correction (2026-10-01).** An earlier version of this study reported "5 events, 4/5 and
+> 2/5". Those came from an ad-hoc CSV that no committed script generated. Recomputed with
+> `experiments/jump_events.py`: **4 events, 3/4 and 1/4**. Same conclusion, stronger.
 
 ---
 
@@ -322,20 +461,45 @@ Stated plainly, because these are the reviewer questions:
 4. **Why the right regime doesn't help:** the budget is denominated in *trailing* vol
    (`vol_mult · σ_t`), so when vol jumps it is set from stale risk — the same trailing-window
    weakness as the baseline, on the tail instead of the mean. Beating a vol-target on a jump
-   needs a genuinely forward-looking risk signal (implied vol, a jump model), which is not
-   available in this data. This is a design limitation, not a tuning problem.
-5. **Single market, single window, four years, ten large caps.** No cross-asset or
+   needs a genuinely forward-looking risk signal. **We built one and tested it**: a
+   jump-augmented GARCH(1,1)-t. At matched information it *significantly helps the scalar rule*
+   and *significantly hurts the MPC* (both `p = 0.001`). This is an architectural problem,
+   not a tuning problem — the added MPC structure dilutes the good signal.
+5. **The MPC's tail advantage is not de-risking.** At matched realized exposure the MPC holds
+   up to **1.18× more** risk for less return, and remains worse on CVaR, Sharpe, and drawdown.
+   The obvious escape route is closed. See [Exposure-matched control](#exposure-matched-control).
+6. **The self-calibration loop is not carrying the result.** The loop is verifiably *active*
+   (realized breach frequency 0.0112 against target `δ = 0.01`) but its effect is near-null:
+   mean exposure cap 0.991, mean uncertainty ratio 1.016, so there is almost nothing to
+   tighten. We did not tune `η`/`δ` against validation returns to fix this, because that would
+   fit the evaluation window.
+7. **Single market, single window, four years, ten large caps.** No cross-asset or
    cross-market replication.
-6. **Sharpe is dominated by seed noise.** Intervals of ±0.9 make this a tail-risk study, not a
+8. **Sharpe is dominated by seed noise.** Intervals of ±0.9 make this a tail-risk study, not a
    return study.
-7. **The test period has never been examined.** None of the above is confirmed out of sample.
+9. **The test period has never been examined.** None of the above is confirmed out of sample.
    (The vol-jump search is explicitly hard-bounded to `val_end` for exactly this reason.)
-8. **The title is a mechanism claim, not a performance claim.** "Self-Calibrating
-   Uncertainty-Aware MPC for Tail-Risk Budgeting" is supported as a *mechanism* (the budget is
-   real, live, calibrated, and beats the exposure-cap ablation at p = 0.001), but **not** as a
-   claim that this improves portfolios over a simple baseline. Taken as a superiority claim,
+10. **The title is a mechanism claim, not a performance claim.** "Self-Calibrating
+   Uncertainty-Aware MPC for Tail-Risk Budgeting in Portfolios" is supported as a *mechanism*
+   — the budget is real, live (binds 54.2% of days, zero violations), calibrated, and adding it
+   improves the tail at `p = 0.001`, replicated under a forecast-ablation control. It is **not**
+   a claim that this improves portfolios over a simple baseline. Taken as a superiority claim,
    the title is falsified. Soften it, or gather data where the MPC has room to win — do not
    rescue it by tuning `vol_mult` on validation returns.
+
+### The one surviving claim
+
+`mpc_tailbudget` subclasses `mpc_selfcal`, so the two differ by exactly one constraint. Adding
+a hard CVaR(5%) budget improves the tail:
+
+| comparison | ΔCVaR | 95% CI | p |
+|---|---|---|---|
+| `mpc_tailbudget` − `mpc_selfcal` | **+0.00159** | [0.00101, 0.00214] | **0.001** |
+| `mpc_tailbudget_nofc` − `mpc_selfcal` | **+0.00185** | [0.00108, 0.00268] | **0.001** |
+
+MPC-against-MPC, identical tightening machinery, so it is not confounded by exposure level in
+the way a cross-family comparison would be. This is the mechanism the title names, and it is
+the only robustly significant positive effect in the project.
 
 ---
 
@@ -352,6 +516,18 @@ timeline with numbers in [`docs/experiment_log.md`](docs/experiment_log.md).
 | bootstrap p-values compared the **centred** distribution | every p-value ≈ 0.97–0.99, i.e. "nothing is significant" always | compare the uncentred replicate distribution against 0 |
 | stress labels derived from the controller's own detector | circular — the "16 episodes / 277 days" figure was meaningless | independent train-fitted rule (above) |
 | variance-shift test compared post-shift breach rate to the *calm pre-shift* baseline | tested the wrong quantity; the loop controlled the post-shift rate all along | compare post-shift against post-shift: 0.174 unmanaged → 0.010, exactly `δ` |
+| GARCH negative log-likelihood sign inverted | optimizer **maximized** the loss and returned its start point | negate correctly; the fit must improve on its grid-search start |
+| `_pack` exponentiated `omega` and `nu`, not just `alpha`/`beta` | `nu = 8` became `e^8 ≈ 3000` | only `alpha` and `beta` are log-parameterized |
+| GARCH jump term **added** to the variance | adding ~1.0 to a ~1e-3 daily variance pins the forecast at its cap | the jump must **multiply** the shock, keeping units consistent |
+| off-by-one in the GARCH forecast recursion | `range(len(e)-1)` never propagated the newest return, so `h_{t+1}` ignored the very shock it must react to — forecast was bit-identical for 0.5σ and 3σ shocks | propagate the newest observation; guarded by a shock-monotonicity test |
+| L-BFGS-B walked a good grid point onto the `alpha`/`beta` lower bounds | better objective, degenerate flat model | explicit at-bound guard rejects the candidate |
+| a "5 jump events" table was generated by an ad-hoc session | no committed script reproduced it; the claim was unreproducible | `experiments/jump_events.py` regenerates it (4 events); orphan CSV deleted |
+| bibliography entries written from memory | 3 guessed arXiv IDs were **physics papers**; 3 volume/page/year sets were wrong | every entry registry-verified via Crossref/arXiv; fields transcribed from the API response |
+
+The last two matter most. The first is a *mechanism* bug that made a signal look plausible
+while being worthless; the second is a *reporting* bug that would have put an unreproducible
+number in a paper. Both are why the volatility findings above rest on the decision-level
+matched-information test rather than on any correlation coefficient.
 
 ---
 
@@ -373,53 +549,78 @@ The order matters — each step was gated on the previous one.
 5. **Tail-risk budget** (`src/mpc.py` `scenario_returns`/`cvar_of_paths` + `mpc_tailbudget`),
    the paper-title mechanism: a hard CVaR(5%) cap via the Rockafellar–Uryasev epigraph that
    keeps the problem a QP. 19 dedicated tests, including budget-respected, budget-binds,
-   solver-status, and cash-on-infeasible-budget.
-6. **Stationary block bootstrap** (`src/bootstrap.py`, Politis & Romano geometric blocks).
+   solver-status, and cash-on-infeasible-budget. The budget needed CLARABEL at tight
+   tolerances: at default settings the solver returned `optimal_inaccurate` while violating
+   the budget by ~20%.
+6. **Exposure confound ruled out** (`experiments/exposure_matched.py`). The escape route for
+   every "the MPC wins on tails" claim is that it simply held less risk. Measured and
+   falsified in the awkward direction: at matched exposure the MPC holds *more* risk for less
+   return. This also forced the `cvar_daily` sign convention to be documented and tested —
+   getting it backwards inverts every verdict.
+7. **Forward-looking risk signal** (`src/fwdvol.py`, jump-augmented GARCH(1,1)-t) plus the
+   **matched-information pair** (`equal_weight_voltarget_fwd` / `mpc_tailbudget_fwdvol`).
+   This was the attempt to rescue the MPC, and it produced the sharpest negative result in the
+   project. Four parameterization traps are documented in `paper.tex` App. B; two more
+   (optimizer walking onto parameter bounds, and the unreproducible event table) are in
+   `docs/experiment_log.md`.
+8. **Stationary block bootstrap** (`src/bootstrap.py`, Politis & Romano geometric blocks).
    Verified before use: realized mean block length **9.93** against a target of 10, lag-1
    adjacent-index rate 0.886 confirming dependence preservation. Paired differences reuse one
    shared resampled index sequence per replicate.
-7. **Independent stress labels** (`src/stress.py`, `docs/stress_definition.md`), train-fitted
+9. **Independent stress labels** (`src/stress.py`, `docs/stress_definition.md`), train-fitted
    and frozen.
-8. **Stress-conditional and per-episode analysis** (`experiments/regime_conditional.py`): all
-   83 episodes on shared axes, plus a mean-exposure plot aligned at episode start. Max drawdown
-   is deliberately omitted on non-contiguous subsets.
-9. **Log everything** in `docs/experiment_log.md`, including the null results and the bugs.
+10. **Stress-conditional and per-episode analysis** (`experiments/regime_conditional.py`): all
+    83 episodes on shared axes, plus a mean-exposure plot aligned at episode start. Max drawdown
+    is deliberately omitted on non-contiguous subsets.
+11. **Volatility-jump regime study** (`experiments/regime_test.py` fixture + single real
+    window; `experiments/jump_events.py` for the full enumeration). The largest jump in the
+    sample is COVID, in the sealed test period, so the event search is hard-bounded to
+    `val_end` and the bound is unit-tested in both scripts.
+12. **Log everything** in `docs/experiment_log.md`, including the null results, the bugs, and
+    the two numbers that had to be **retracted** when a reproducibility audit found no
+    committed script could produce them.
 
 ---
 
 ## Repository layout
 
 ```
-configs/default.yaml        every hyperparameter; splits, costs, seeds, ACI, selfcal
+paper.tex                   IEEE journal manuscript (the title above); no LaTeX in this env
+references.bib              17 entries, each verified against Crossref / arXiv / PMLR
+configs/default.yaml        every hyperparameter; splits, costs, seeds, ACI, selfcal, fwdvol
 src/
-  data.py                   download, synthetic fixture, period bounds
+  data.py                   download, synthetic fixtures (sim + block-regime), period bounds
   backtest.py               daily engine — no look-ahead, costs, causal observe() hook
   metrics.py                Sharpe, Sortino, maxDD, CVaR 5%, turnover, costs
-  baselines.py              equal_weight, buy_hold, markowitz, + 2 new
+  baselines.py              equal_weight, buy_hold, markowitz, + both vol-target rules
   estimators.py             shrunk covariance
   forecaster.py             RidgeForecaster, GRUForecaster (torch optional)
   conformal.py              adaptive conformal prediction (Gibbs & Candès ACI)
-  mpc.py                    CVXPY controller + tighten_limits (the core)
+  mpc.py                    CVXPY controller, tighten_limits, CVaR epigraph (the core)
   regime.py                 VolRegimeDetector — calm/stress "market mood"
   selfcal.py                BetaState, DisagreementEnsemble, uncertainty ratio
   strategies.py             ablation ladder; MPCTailBudgetStrategy = title mechanism
-  strategies.py             the ablation ladder
   stress.py                 independent stress labels + episodes
-  bootstrap.py              stationary block bootstrap
+  bootstrap.py              stationary block bootstrap (Politis & Romano)
+  fwdvol.py                 jump-augmented GARCH(1,1)-t forward-vol signal
+  utils.py                  config, seeding, run dirs
 experiments/
-  run_all.py                full ladder; guards the test period
+  run_all.py                full 15-strategy ladder; guards the test period
   block_bootstrap.py        Step 1 — bootstrap CIs and paired differences
   regime_conditional.py     Steps 2 & 3 — stress/calm metrics, episode exposure
+  regime_test.py            vol-jump fixture + single real window, hard-bounded search
+  jump_events.py            every real jump+revert event, de-clustered and hard-bounded
+  exposure_matched.py       realized-exposure diagnostic + matched-exposure comparison
   make_block_diagram.py     renders the block diagram from live config
-tests/                      67 tests; test_backtest.py holds the no-look-ahead harness
+tests/                      130 tests; test_backtest.py holds the no-look-ahead harness
 docs/
-  experiment_log.md         every run, every bug, every null result
+  paper.md                  manuscript notes and the same numbers, in prose
+  experiment_log.md         every run, every bug, every null result, every retraction
   stress_definition.md      the independent stress rule, with rejected alternatives
   hypothesis.md             the one falsifiable claim under test
   flow.mmd                  editable Mermaid source for the pipeline diagram
   figures/block_diagram.png generated from the live config
-  figures/flow.svg          rendered from flow.mmd
-references.bib              9 entries, each verified against Crossref / arXiv / PMLR
+  figures/flow.svg          rendered from flow.mmd  (STALE — regenerate before submission)
 ```
 
 ---
@@ -429,24 +630,45 @@ references.bib              9 entries, each verified against Crossref / arXiv / 
 ```bash
 source .venv/bin/activate
 
-python -m pytest -q                                  # 67 passed, 1 skipped
-python -m experiments.run_all --period val           # ladder -> results/<ts>-val/
+python -m pytest -q                                  # 130 passed, 1 skipped
+python -m experiments.run_all --period val           # 15-strategy ladder -> results/<ts>-val/
 python -m experiments.block_bootstrap                 # Step 1
 python -m experiments.regime_conditional              # Steps 2 & 3
+python -m experiments.jump_events                     # -> results/jump_events.csv
+python -m experiments.exposure_matched                # matched-exposure control
+python -m experiments.regime_test                     # fixture + single real jump window
 python -m experiments.make_block_diagram              # -> docs/figures/block_diagram.png
+
+pdflatex paper.tex && bibtex paper && pdflatex paper.tex && pdflatex paper.tex
 ```
 
 Every run writes `results/<timestamp>-*/` with its own `config.yaml` snapshot. Outputs are
-git-ignored by design; the numbers in this README are the record until you choose otherwise
-(see *Known gaps* below).
+git-ignored by design; the numbers in this README and in `docs/experiment_log.md` are the
+record until you choose otherwise.
 
-**References.** [`references.bib`](references.bib) holds nine entries. Every one was verified
-against a live registry — Crossref for the journal and conference DOIs, the arXiv API for the
-preprint, PMLR `citation_*` metadata for the L4DC paper — and the file carries a one-liner to
-re-run that verification. The most important entry is **Chee et al. (2024)**, L4DC: it also
-drives constraint tightening from conformal uncertainty, in continuous control rather than
-portfolio allocation. It is the nearest prior work to this project and a reviewer will ask why
-it is not a baseline. Position it explicitly before submission.
+**The manuscript is not yet submission-ready.** Three things must be done first:
+
+1. **Generate the placeholder figures.** Fig. 4 (main forest plot) and Fig. 6 (exposure vs
+   CVaR) are `\framebox` placeholders in `paper.tex`.
+2. **Regenerate `docs/figures/flow.svg`** — it is stale (2025-09-30) and predates the
+   forward-volatility and exposure-control workstreams.
+3. **Compile the PDF.** There is no LaTeX toolchain in this environment, so `paper.tex` has
+   only been validated *structurally*: brace and environment balance, no dangling `\cref`,
+   every `\cite` resolving, all 17 bibliography entries cited. It has never been compiled.
+
+**References.** [`references.bib`](references.bib) holds 17 entries, every one verified against
+a live registry — Crossref for journal and conference DOIs, the arXiv API for preprints, PMLR
+`citation_*` metadata for the L4DC paper — with the author/venue/volume/page/year fields
+transcribed from the API response rather than from memory. Verification matters more than it
+sounds: while adding the related-work block, **3 guessed arXiv IDs turned out to be physics
+papers** and 3 volume/page/year sets were wrong. A guessed DOI is worse than no citation, so
+two papers that could not be confirmed (Safronov; Leake & Lodha) are deliberately **not**
+cited. The file carries a one-liner to re-run the verification.
+
+The most important entry is **Chee et al. (2024)**, L4DC: it also drives constraint tightening
+from conformal uncertainty, in continuous control rather than portfolio allocation. It is the
+nearest prior work and a reviewer will ask why it is not a baseline. The manuscript positions
+it explicitly in Related Work.
 
 ---
 

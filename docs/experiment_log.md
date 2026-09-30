@@ -608,3 +608,59 @@ forward-looking vol estimate is the strongest baseline found in this study, and 
 MPC structure dilutes rather than improves a good risk signal. That is a coherent
 negative-result paper with a clear, generalizable lesson. Do NOT tune vol_mult or jump_scale
 against these numbers to manufacture a win.
+
+## 2026-10-01 — exposure-matched diagnostic: my "de-risking" explanation was WRONG
+
+I proposed that the MPC's one win (2016) and its 2/5 jump-event wins came from DE-RISKING -
+holding less risk, which mechanically flatters a downside-tail statistic. That is a real
+confound and it had to be removed before claiming anything. `experiments/exposure_matched.py`
+measures realized mean gross exposure from the backtest weights, then rescales every
+strategy's net returns to a common exposure and recomputes all metrics.
+
+### The hypothesis, and what actually happened
+
+| strategy | mean gross exposure |
+|---|---|
+| equal_weight_voltarget_fwd | 0.6862 |
+| equal_weight_voltarget | 0.7673 |
+| mpc_tailbudget_nofc | 0.7674 |
+| mpc_tailbudget_fwdvol | 0.7835 |
+| mpc_tailbudget | 0.8121 |
+
+**The MPC holds MORE exposure than the baseline, not less - up to 1.18x.** So the
+de-risking explanation is FALSIFIED. It is not hiding in cash; it is running at higher
+exposure and still losing on risk-adjusted terms.
+
+### At matched exposure (all rescaled to 0.6862)
+
+| strategy | Sharpe | CVaR | maxDD | ann_vol |
+|---|---|---|---|---|
+| equal_weight_voltarget | 1.302 | -0.0117 | -0.0958 | 0.0939 |
+| equal_weight_voltarget_fwd | 1.299 | -0.0117 | -0.0937 | 0.0929 |
+| mpc_tailbudget | 1.196 | -0.0127 | -0.1248 | 0.0941 |
+| mpc_tailbudget_nofc | 1.265 | -0.0132 | -0.1320 | 0.0988 |
+| mpc_tailbudget_fwdvol | 1.241 | -0.0137 | -0.1363 | 0.1012 |
+
+At EQUAL exposure the baseline is better on every risk metric, and the MPC's volatility is
+now indistinguishable from the baseline's (0.094-0.101 vs 0.093) - as it should be, since
+exposure is matched. The MPC's Sharpe deficit (-0.04 to -0.11) and its worse CVaR survive
+the control. Between 11% and 69% of the raw CVaR gap was an exposure artifact; the remainder
+is genuine allocation difference, and it still points at the baseline.
+
+### What this closes
+
+My "the MPC wins only by de-risking" story was wrong in the direction that MATTERS: the MPC
+takes MORE risk and gets LESS return for it. That is strictly worse than the de-risking
+story, because de-risking at least delivered the lower tail it promised. So:
+
+- The unfalsified result remains exactly one thing: **the CVaR tail budget beats the
+  exposure cap at p=0.001** (`mpc_tailbudget` vs `mpc_selfcal`), a MPC-vs-MPC comparison
+  that is unaffected by exposure since both carry the same tightening machinery.
+- The MPC does not beat a matched scalar volatility-targeting rule on any metric, at any
+  exposure, in any of the four years, or in 3 of 5 jump events.
+- Fifth falsification record, and the strongest statement yet: the problem is not that the
+  MPC is too timid, it is that the added MPC structure costs return for no risk benefit.
+
+CAVEAT: rescaling is an analytical normalization (cash at 0%), not a tradeable backtest -
+turnover and costs do NOT rescale consistently, so no cost conclusion is drawn here. It also
+uses the full validation period, so it is a diagnostic for the confound, not a new result.

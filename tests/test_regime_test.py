@@ -109,3 +109,67 @@ def test_subwindow_metrics_cvar_takes_the_worst_tail():
     q = np.quantile(r, 0.05)
     assert m["cvar_daily"] == pytest.approx(-r[r <= q].mean())
     assert m["cvar_daily"] > 0, "cvar_daily is reported as a loss magnitude (positive)"
+
+
+# ------------------------------------------------------------- exposure-matched diagnostic
+
+def test_scale_to_exposure_actually_hits_the_target():
+    """The whole diagnostic rests on this: scaling by k must move exposure to k*from."""
+    from experiments.exposure_matched import scale_to_exposure
+    idx = pd.bdate_range("2020-01-01", periods=300)
+    net = pd.Series(np.random.default_rng(0).normal(0.0005, 0.01, 300), index=idx)
+    out = scale_to_exposure(net, 0.5, 1.0)
+    assert out.std(ddof=1) == pytest.approx(net.std(ddof=1) * 2.0, rel=1e-9)
+    assert out.mean() == pytest.approx(net.mean() * 2.0, rel=1e-9)
+    # scaling to the SAME exposure is the identity
+    same = scale_to_exposure(net, 0.7, 0.7)
+    pd.testing.assert_series_equal(same, net)
+
+
+def test_scale_to_exposure_respects_a_risk_free_rate():
+    """With rf > 0 the scaling must be rf + k*(net - rf), not simply k*net."""
+    from experiments.exposure_matched import scale_to_exposure
+    idx = pd.bdate_range("2020-01-01", periods=50)
+    net = pd.Series(np.full(50, 0.01), index=idx)
+    rf = 0.0001
+    out = scale_to_exposure(net, 1.0, 2.0, rf_daily=rf)
+    assert out.iloc[0] == pytest.approx(rf + 2.0 * (0.01 - rf))
+    # a constant-rf series must return exactly rf at zero exposure change
+    flat = pd.Series(np.full(50, rf), index=idx)
+    assert scale_to_exposure(flat, 1.0, 1.0, rf_daily=rf).iloc[0] == pytest.approx(rf)
+
+
+def test_mean_exposure_is_computed_from_weights_and_is_causal():
+    """Exposure must come from the realized weights, and must not read the future."""
+    from experiments.exposure_matched import mean_exposure, synth_result
+    idx = pd.bdate_range("2020-01-01", periods=10)
+    w = pd.DataFrame({"a": [0.5] * 5 + [0.1] * 5, "b": [0.5] * 5 + [0.1] * 5}, index=idx)
+    net = pd.Series(0.0, index=idx)
+    res = synth_result(net)
+    res.weights = w
+    assert mean_exposure(res) == pytest.approx(0.6)
+    # truncating the future must not change the mean over the retained prefix
+    res_short = synth_result(net.iloc[:5])
+    res_short.weights = w.iloc[:5]
+    assert mean_exposure(res_short) == pytest.approx(1.0)
+
+
+def test_exposure_matched_uses_the_minimum_exposure_not_the_maximum():
+    """Matching up to the highest exposure would reward the most aggressive strategy.
+
+    The script must match to the LOWEST realized exposure, so nobody is advantaged by having
+    taken more risk than the comparison.
+    """
+    import inspect
+    from experiments import exposure_matched
+    src = inspect.getsource(exposure_matched.main)
+    assert "min(exps.values())" in src, "must match to the lowest realized exposure"
+    assert "max(exps.values())" not in src
+
+
+def test_exposure_matched_flags_the_cvar_sign_convention():
+    """cvar_daily is a NEGATIVE loss magnitude; a sign slip would invert every verdict."""
+    import inspect
+    from experiments import exposure_matched
+    src = inspect.getsource(exposure_matched)
+    assert "NEGATIVE loss magnitude" in src, "must document the CVaR sign convention"

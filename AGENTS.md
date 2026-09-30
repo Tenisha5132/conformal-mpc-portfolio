@@ -125,6 +125,20 @@ Sharpe, Sortino, max drawdown, annualized return/vol, CVaR 5%, turnover, total c
   No-look-ahead test gotcha: the fit window is r[-lookback:], so to test look-ahead both
   histories must be >= lookback long, else the shorter one fits fewer rows. And below min_obs
   the forecaster silently takes a realized-vol fallback, comparing two different estimators.
+- FALSIFIED (2026-10-01, fifth record, and the STRONGEST one): the "the MPC's wins are just
+  de-risking" escape route is FALSE. experiments/exposure_matched.py measures realized mean
+  gross exposure from backtest weights and rescales every strategy to a common exposure.
+  RESULT: the MPC holds MORE exposure than the baseline (mpc_tailbudget .812 vs voltarget
+  .767; fwdvol .784 vs voltarget_fwd .686, up to 1.18x). At matched exposure the baseline is
+  still better on CVaR (-0.0117 vs -0.0127..-0.0137), Sharpe (1.302 vs 1.196..1.265) and
+  maxDD, with indistinguishable vol - so the MPC takes MORE risk for LESS return, which is
+  strictly worse than the de-risking story I was hoping for. 11-69% of the raw CVaR gap was
+  an exposure artifact; the rest still points at the baseline.
+  ONLY UNFALSIFIED CLAIM IS: the CVaR tail budget beats the exposure cap (mpc_tailbudget vs
+  mpc_selfcal, p=0.001) - MPC vs MPC, same machinery, unaffected by the exposure confound.
+  TRAP: cvar_daily is a NEGATIVE loss magnitude, so "diff = mpc - base < 0" means the BASE is
+  better. Getting this sign wrong inverts every verdict; the script documents it and
+  tests/test_regime_test.py::test_exposure_matched_flags_the_cvar_sign_convention guards it.
 - DATA POLICY: reported numbers come from real NSE prices only (10 tickers, cached in data/raw).
   The simulated generator (cfg['synthetic']) exists solely so the test suite runs offline; every
   one of its parameters is in the config, and the runner prints a warning banner on synthetic runs.

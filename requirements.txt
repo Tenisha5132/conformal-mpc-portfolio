@@ -1,0 +1,9 @@
+numpy
+pandas
+scipy
+cvxpy
+pyyaml
+matplotlib
+pytest
+yfinance
+torch

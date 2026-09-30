@@ -1,0 +1,1 @@
+At matched annualized volatility, the self-calibrating controller has lower CVaR(5%) and max drawdown than (i) volatility-targeted equal-weight and (ii) drawdown-adaptive MPC, and its realized tail-loss frequency is close to the budget.

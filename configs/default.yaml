@@ -1,0 +1,154 @@
+seed: 42
+
+data:
+  tickers: [RELIANCE.NS, TCS.NS, HDFCBANK.NS, INFY.NS, ICICIBANK.NS,
+            HINDUNILVR.NS, ITC.NS, SBIN.NS, BHARTIARTL.NS, LT.NS]
+  start: "2012-01-01"
+  end: "2025-12-31"
+  cache_dir: data/raw
+  # Real-market price cleaning. Anything below this coverage is treated as a bad ticker.
+  min_coverage: 0.95
+  ffill_limit: 3         # forward-fill short gaps up to this many consecutive days
+
+# OFFLINE TEST FIXTURE ONLY. Simulated market used so the test suite can run without
+# network access. NEVER report results from this generator - use the real tickers above.
+synthetic:
+  n_assets: 8
+  start: "2012-01-02"
+  end: "2025-12-31"
+  p_stay_calm: 0.985      # daily regime-switch persistence when calm
+  p_stay_stress: 0.94    # ... and when stressed
+  vol_calm: 0.008         # daily market vol per regime
+  vol_stress: 0.024
+  drift: 0.0004           # unconditional daily market drift
+  beta_low: 0.6           # asset market betas ~ U(beta_low, beta_high)
+  beta_high: 1.4
+  idio_vol: 0.010         # daily idiosyncratic vol
+  momentum: 0.05          # AR(1) coefficient on lagged returns
+  price_base: 100.0
+
+# Train: everything up to train_end (models may warm up here).
+# Val:   tune hyperparameters HERE ONLY.
+# Test:  untouched until the final run (needs --final).
+splits:
+  train_end: "2015-12-31"
+  val_end: "2019-12-31"
+
+backtest:
+  cost_bps: 10          # one-way cost per unit of turnover, applied to ALL strategies
+  lookback: 252         # days of history used for mean/covariance estimates
+  trading_days: 252     # trading days per year, for annualizing metrics
+
+metrics:
+  cvar_alpha: 0.05      # tail level for CVaR (0.05 = worst 5% of days)
+  risk_free: 0.0        # daily risk-free rate. 0.0 => Sharpe/Sortino on raw returns
+
+# Competitor baselines added 2026-09-30. Both are deliberately strong: the paper must show
+# the core contribution beats generic risk controls, not just a naive equal weight.
+baselines:
+  # equal_weight_voltarget: classic vol-scaled equal weight. Scales the 1/N vector so the
+  # PORTFOLIO's realized vol hits vol_target, clipped at max_exposure. This is the standard
+  # industry risk control, and it is the primary non-MPC reference for the bootstrap.
+  vol_target: 0.10
+  vol_lookback: 60
+  vol_max_scale: 2.5     # cap on the per-day vol scaling factor
+  # mpc_dd_riskaversion: same MPC as mpc_naive, but risk aversion is raised when the
+  # controller's OWN equity is in drawdown. This is the closest competitor to the core
+  # contribution (adaptive risk limits) - it adapts to realized losses instead of to
+  # forecast uncertainty, which is exactly the contrast the paper needs to isolate.
+  dd_lookback: 252       # trading days of internal equity history
+  dd_trigger: 0.05       # drawdown from running peak that arms the multiplier
+  dd_risk_mult: 3.0      # risk aversion multiplier while the drawdown trigger is armed
+
+# mpc_selfcal: self-calibrating tightening. beta_t is learned online toward a target
+# daily breach frequency instead of being a hand-set constant (src/selfcal.py).
+selfcal:
+  beta0: 0.0           # starting beta; 0 = start with the untightened base limits
+  loss_threshold: 0.02 # a day "breaches" when realized net return < -this
+  delta: 0.01          # target daily breach frequency beta is driven toward
+  eta: 0.05            # step size of the beta update
+
+# Forecast ensemble used for the disagreement signal. GRU is included only when torch is
+# importable, so the ensemble degrades gracefully on a torch-free machine.
+ensemble:
+  use_gru: true
+  momentum_lag: 5       # lookback of the simple momentum member, in days
+  history: 250         # trailing days used to normalize the disagreement ratio
+
+# INDEPENDENT stress labelling. Deliberately shares NO statistic with regime.VolRegimeDetector
+# (which thresholds a 21d rolling std of the equal-weight market return against an expanding
+# quantile). This rule instead uses (a) cross-sectional dispersion across assets and (b) the
+# equal-weight market return hitting its own train-window lower tail, with BOTH thresholds
+# fitted on the TRAIN window only and then frozen. See docs/stress_definition.md.
+stress_label:
+  dispersion_quantile: 0.80   # cross-sectional dispersion above this TRAIN-period quantile
+  market_return_quantile: 0.10  # OR equal-weight market return below this TRAIN lower tail
+  warmup: 60                 # days before labelling starts
+  min_episode_days: 3        # episodes shorter than this are dropped
+  merge_gap_days: 2          # merge episodes separated by <= this many calm days
+
+mpc:
+  horizon: 5
+  # Tuned on the VALIDATION period only. gamma=5 keeps realized exposure ~0.98, i.e. the
+  # controller runs AGAINST its constraints, so uncertainty-driven tightening actually binds.
+  # Larger gamma (20/50) is a trap: it parks exposure at 0.6/0.3, flattering Sharpe via
+  # near-zero vol while making the core tightening mechanism inert (all constraints slack).
+  risk_aversion: 5.0
+  max_weight: 0.30
+  max_exposure: 1.0     # fraction of wealth allowed in risky assets (rest is cash)
+  vol_cap: null         # optional daily portfolio-vol cap (e.g. 0.012); null = off
+  cov_shrink: 0.2
+  forecast_persistence: 0.6  # mean forecast decays this factor per horizon step (1-day
+                             # forecasts must NOT be held flat for all H steps)
+
+forecaster:
+  kind: ridge           # ridge | gru
+  lookback: 20          # past days of returns fed to the model
+  train_window: 1000
+  retrain_every: 63
+  # val sweep: corr(pred, realized) ~= -0.035 (no daily skill on these names) and Sharpe
+  # degrades monotonically in mu_shrink, confirming the forecast is close to noise.
+  # 0.05 keeps turnover at ~0.04/day while leaving the conformal/tightening layers
+  # a real signal to modulate. Anything above ~0.1 reintroduces the turnover blow-up.
+  mu_shrink: 0.05        # mu = mu_shrink*prediction + (1-mu_shrink)*historical mean
+  ridge_alpha: 200.0
+  gru_hidden: 32
+  gru_epochs: 15
+  gru_lr: 0.001
+  gru_batch: 64
+  gru_weight_decay: 0.0001
+
+conformal:
+  alpha: 0.10           # target miscoverage (90% intervals)
+  gamma: 0.005          # ACI step size
+  window: 250           # rolling calibration window of residuals
+  min_cal: 30           # residuals needed before intervals are trusted
+  # kappa scales the worst-case mean penalty. Daily interval half-widths (~0.028) dwarf
+  # daily mean returns (~0.001), so a large kappa drives the worst-case mu negative for
+  # every asset and the robust MPC degenerates to holding cash. Val sweep: kappa=0.05
+  # collapses exposure to 0.03 (all cash). 0.002 is the largest value that keeps the
+  # portfolio genuinely invested (val avg exposure 0.58).
+  kappa: 0.002          # worst-case mu = mu - kappa*halfwidth
+
+tighten:
+  beta: 1.0             # how fast limits shrink when uncertainty spikes
+  min_exposure: 0.2
+  ratio_history: 250    # days of past interval widths used as "normal"
+  min_ratio_history: 20 # past widths required before the ratio is trusted (else 1.0)
+
+regime:
+  vol_window: 21
+  quantile: 0.80        # stress if market vol above this expanding quantile
+  min_history: 252
+  min_vol_history: 30   # rolling vol observations required before the detector fires
+  stress_risk_mult: 2.0 # multiply risk aversion in stress
+  stress_exposure: 0.5  # cap on exposure in stress
+
+# Stationary (Politis-Romano) block bootstrap over the REAL validation returns. Resamples the
+# observed daily returns, so it never fabricates returns from a parametric distribution.
+bootstrap:
+  mean_block_days: 10   # mean block length L; the end-of-block hazard is p = 1/L
+  n_resamples: 2000
+  confidence: 0.95
+  # Paired differences are reported against these two references.
+  reference_strategies: [equal_weight_voltarget, mpc_naive]

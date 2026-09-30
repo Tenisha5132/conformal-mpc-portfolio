@@ -301,4 +301,4 @@ we found.
 Numbers: `docs/experiment_log.md` (chronological, with the parameterization bugs recorded).
 Figures: `docs/figures/`. Config: `configs/default.yaml`. Experiments: `experiments/run_all.py`
 (main ladder), `experiments/regime_test.py` (jump windows), `experiments/exposure_matched.py`
-(exposure control). Tests: `tests/` (124 passing, including no-look-ahead for every feature).
+(exposure control). Tests: `tests/` (130 passing, including no-look-ahead for every feature).

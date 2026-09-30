@@ -166,3 +166,124 @@
              dependent return series, which is why Sharpe intervals here are
              roughly $\pm 0.9$ wide rather than much narrower.}
 }
+
+% ======================= added for the manuscript (v2) =====================
+% Each entry below was verified against a live registry on 2026-10-01 via the
+% Crossref REST API (api.crossref.org/works/<DOI>) or the arXiv API, and the
+% author/venue/volume/page/year fields are transcribed from that response.
+%
+% A NOTE ON WHAT WAS REMOVED WHILE VERIFYING: earlier drafts of paper.tex cited
+% several well-known papers from memory. Registry lookup REJECTED most of them:
+%   - "Coherent Measures of Risk" is Math. Finance 9(3):203-228 (1999), NOT 8(1):5-55.
+%   - "Volatility-Managed Portfolios" is J. Finance 72(4):1611-1644 (2017).
+%   - "Momentum has its moments" is JFE 116(1):111-120 (2015), NOT 2011/695-714.
+%   - arXiv 1703.00434 / 2206.01115 / 2209.06009 are physics papers, not the
+%     Donti / Safronov / Leake papers they were guessed to be.
+% Guessed DOIs and arXiv IDs are worse than no citation, so only registry-
+% confirmed entries are kept. Safronov and Leake & Lodha are NOT cited because
+% they could not be confirmed by an automated lookup; cite them by hand if wanted.
+
+@article{angelopoulos2023gentle,
+  title   = {Conformal Prediction: A Gentle Introduction},
+  author  = {Angelopoulos, Anastasios N. and Bates, Stephen},
+  journal = {Foundations and Trends in Machine Learning},
+  volume  = {16},
+  number  = {4},
+  pages   = {494--591},
+  year    = {2023},
+  doi     = {10.1561/2200000101},
+  note    = {Tutorial treatment of the conformal framework used in
+             \texttt{src/conformal.py}. Supersedes the 2021 arXiv preprint
+             2107.07511 of the same title.}
+}
+
+@article{artzner1999coherent,
+  title   = {Coherent Measures of Risk},
+  author  = {Artzner, Philippe and Delbaen, Fran\c{c}ois and Eber, Jean-Michel
+             and Heath, David A.},
+  journal = {Mathematical Finance},
+  volume  = {9},
+  number  = {3},
+  pages   = {203--228},
+  year    = {1999},
+  doi     = {10.1111/1467-9965.00068},
+  note    = {Coherence axioms motivating the tail measure in
+             \cref{eq:budget} over a variance-based target.}
+}
+
+@article{moreira2017volatility,
+  title   = {Volatility-Managed Portfolios},
+  author  = {Moreira, Alan and Muir, Tyler},
+  journal = {The Journal of Finance},
+  volume  = {72},
+  number  = {4},
+  pages   = {1611--1644},
+  year    = {2017},
+  doi     = {10.1111/jofi.12513},
+  note    = {The result that motivates our strongest baseline. Their simple
+             variance scaling is the reference point our MPC fails to beat in
+             \cref{sec:forward} and \cref{sec:exposure}.}
+}
+
+@article{barroso2015momentum,
+  title   = {Momentum has its moments},
+  author  = {Barroso, Pedro and Santa-Clara, Pedro},
+  journal = {Journal of Financial Economics},
+  volume  = {116},
+  number  = {1},
+  pages   = {111--120},
+  year    = {2015},
+  doi     = {10.1016/j.jfineco.2014.11.010},
+  note    = {Independent evidence that volatility scaling is a strong,
+             hard-to-beat baseline in equity portfolios.}
+}
+
+@book{boyd2004convex,
+  title     = {Convex Optimization},
+  author    = {Boyd, Stephen and Vandenberghe, Lieven},
+  publisher = {Cambridge University Press},
+  year      = {2004},
+  doi       = {10.1017/CBO9780511804441},
+  note      = {Convex-programming background for \cref{eq:mpc} and the
+               scenario-linearized program of \cref{sec:budget}.}
+}
+
+@incollection{combettes2011proximal,
+  title     = {Proximal Splitting Methods in Signal Processing},
+  author    = {Combettes, Patrick L. and Pesquet, Jean-Christophe},
+  booktitle = {Fixed-Point Algorithms for Inverse Problems in Science and
+               Engineering},
+  series    = {Springer Optimization and Its Applications},
+  pages     = {185--212},
+  publisher = {Springer},
+  year      = {2011},
+  doi       = {10.1007/978-1-4419-9569-8_10},
+  note      = {Proximal/duality framework underlying the interior-point solver
+               used for the epigraph program of \cref{sec:budget}.}
+}
+
+@misc{donti2017task,
+  title        = {Task-based End-to-end Model Learning in Stochastic Optimization},
+  author       = {Donti, Priya L. and Amos, Brandon and Kolter, J. Zico},
+  year         = {2017},
+  eprint       = {1703.04529},
+  archivePrefix= {arXiv},
+  primaryClass = {math.OC},
+  note         = {Decision-focused learning: optimize the decision loss rather
+                  than forecast error. The closest methodological neighbour to
+                  our conformal-plus-optimizer design, and a precedent for
+                  decision-aware machinery being neutral or harmful.}
+}
+
+@misc{sadana2023contextual,
+  title        = {A Survey of Contextual Optimization Methods for Decision Making
+                  under Uncertainty},
+  author       = {Sadana, Utsav and Chenreddy, Abhilash and Delage, Erick},
+  year         = {2023},
+  eprint       = {2306.10374},
+  archivePrefix= {arXiv},
+  primaryClass = {math.OC},
+  note         = {Survey of decision-aware optimization; used to position the
+                  negative result of \cref{sec:falsified} against the broader
+                  contextual-optimization literature.}
+}

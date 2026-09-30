@@ -96,23 +96,31 @@ Sharpe, Sortino, max drawdown, annualized return/vol, CVaR 5%, turnover, total c
   claim only; as a superiority claim it is FALSIFIED. See docs/experiment_log.md.
 - FALSIFIED (2026-10-01, third record): the "right regime" hypothesis - that MPC beats
   vol-targeting when vol JUMPS and mean-reverts - is FALSE. Fixture: voltarget still wins
-  (Sharpe .338/CVaR -.0176 vs nofc .235/-.0190). Real: only 5 jump+revert events in train+val,
-  nofc wins 2/5, mean CVaR WORSE (+0.0016). ROOT CAUSE: the budget is denominated in TRAILING
+  (Sharpe .338/CVaR -.0176 vs nofc .235/-.0190). Real: 4 jump+revert events in train+val,
+  nofc wins 1/4, mean CVaR WORSE (+0.0058). ROOT CAUSE: the budget is denominated in TRAILING
   vol (vol_mult*sigma_t) so it lags a jump exactly like the baseline; beating it needs a
   forward-looking risk signal (implied vol/jump model), not available here.
   TRAP: the largest vol jump in the sample is Dec-2019->Mar-2020 (COVID, x6.94) = SEALED TEST.
   `find_real_jump_window` takes a mandatory `search_end` bound; do not remove it, and keep
-  tests/test_regime_test.py::test_jump_search_never_reaches_past_the_bound.
+  tests/test_regime_test.py::test_jump_search_never_reaches_past_the_bound. The enumerating
+  sibling experiments/jump_events.py has its own guard: tests/test_jump_events.py.
+  CORRECTION (2026-10-01): an earlier version of this record said "5 events, 2/5, +0.0016".
+  That came from results/fwdvol_jump_events.csv, which NO COMMITTED SCRIPT GENERATES (ad-hoc
+  session). experiments/jump_events.py now regenerates the table reproducibly: 4 events
+  (de-clustered, 140d cooldown), 1/4, +0.00577. The orphan CSV is superseded - do not quote it.
 - FALSIFIED (2026-10-01, fourth record, option 2): a FORWARD-LOOKING risk signal does not save
-  the MPC. src/fwdvol.py = jump-augmented GARCH(1,1)-t, MLE via scipy (no new dep). TRAIN-ONLY
-  1-step-ahead corr(fwdvol,|r_t+1|) .188 vs trailing .170, but Spearman .091 vs .130 (WORSE) -
-  on real NSE returns GARCH is only a marginal improvement, unlike on synthetic GARCH data
-  where it looks great. THE KEY RESULT IS THE MATCHED-INFORMATION PAIR
-  (equal_weight_voltarget_fwd, same GARCH signal, scalar rule):
-    full val CVaR: voltarget_fwd .0117 < voltarget .0131 < mpc_nofc .0148 < mpc_fwdvol .0156
-  The forward signal makes the SIMPLE rule better (4/5 jump events) and the MPC WORSE
-  (2/5, mean +0.0029 vs matched scalar). The MPC DILUTES a good signal: the best risk
-  controller in the study is the dumbest one. Fourth falsification; title unrescuable.
+  the MPC. src/fwdvol.py = jump-augmented GARCH(1,1)-t, MLE via scipy (no new dep).
+  THE KEY RESULT IS THE MATCHED-INFORMATION PAIR (equal_weight_voltarget_fwd, same GARCH
+  signal, scalar rule), and BOTH directions are now SIGNIFICANT in opposite directions
+  (block_bootstrap, 2000 resamples, block 10d, same indices):
+    fwd-vol scalar - trailing scalar: dcv +0.00145 CI[.00087,.00195] p=0.001 (maxDD p=0.028)
+    MPC (fwd vol) - fwd-vol scalar:  dcv -0.00395 CI[-.00692,-.00143] p=0.001
+  The forward signal makes the SIMPLE rule BETTER and the MPC WORSE. The MPC DILUTES a good
+  signal: the best risk controller in the study is the dumbest one.
+  TRAP (do not quote the correlation): the standalone 1-step-ahead corr(fwdvol,|r_t+1|) is NOT
+  ROBUST - pearson .240/.184 at lookback 400 but .091/.063 at 500, and at the CONFIGURED
+  lookback=1000 it cannot be measured on train at all (train is 982 days). The earlier
+  ".188 vs .170" figure is RETRACTED. Argue from the matched-information decision test only.
   TRAPS (all four produced a worthless signal while looking plausible - do not reintroduce):
   (a) negloglik sign inverted -> optimizer MAXIMIZED the loss and returned its start point;
   (b) _pack exponentiated omega AND nu -> nu=8 became e^8; only alpha/beta are log-parameterized;
@@ -143,6 +151,34 @@ Sharpe, Sortino, max drawdown, annualized return/vol, CVaR 5%, turnover, total c
   The simulated generator (cfg['synthetic']) exists solely so the test suite runs offline; every
   one of its parameters is in the config, and the runner prints a warning banner on synthetic runs.
   tests/common.py picks the real cache automatically and records the source on each frame.
+
+## Manuscript
+- IEEE journal draft: `paper.tex` (+ `references.bib`), title retained exactly.
+  Build: `pdflatex paper.tex && bibtex paper && pdflatex paper.tex && pdflatex paper.tex`.
+  NO LATEX TOOLCHAIN IN THIS ENV - validated structurally only (brace/env balance,
+  no dangling \cref, every \cite resolves, 17/17 bib entries cited). PLACEHOLDER
+  figures 4/6 MUST be generated before submission; `flow.svg` is stale (2025-09-30)
+  and predates the fwdvol/exposure workstreams.
+- Bibliography rule: every entry is registry-verified (Crossref/arXiv) with fields
+  transcribed from the API response. Guessed DOIs/arXiv IDs are WORSE than no
+  citation - while verifying, 3 guessed arXiv IDs turned out to be physics papers
+  and 3 volume/page/year sets were wrong. Re-verify before adding entries.
+
+## Key Numbers (validation only; verified 2026-10-01)
+
+| Comparison | dcv | 95% CI | p |
+|---|---|---|---|
+| tailbudget - selfcal (INSTRUMENT) | +0.00159 | [.00101,.00214] | 0.001 |
+| tailbudget_nofc - selfcal (instrument) | +0.00185 | [.00108,.00268] | 0.001 |
+| tailbudget_nofc - tailbudget (forecast drag) | +0.00025 | [-.00050,.00112] | 0.606 |
+| voltarget_fwd - voltarget (signal helps scalar) | +0.00145 | [.00087,.00195] | 0.001 |
+| mpc_fwdvol - voltarget_fwd (signal hurts MPC) | -0.00395 | [-.00692,-.00143] | 0.001 |
+
+Budget utilization on val: mean 0.869, median 0.985, max 0.995, zero violations in
+983 days; "54.2% binding" = fraction of days with utilization >= 0.98 (always state
+the threshold). MECHANISM WORDING: `MPCTailBudgetStrategy` SUBCLASSES
+`MPCSelfCalStrategy`, so the budget is ADDED TO the same uncertainty-driven exposure
+cap, NOT a replacement for it. Never write "replaces".
 
 ## Working style
 - One milestone per session. Read this file, run the tests first, make the change, run the tests again.

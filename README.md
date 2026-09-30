@@ -312,10 +312,13 @@ Stated plainly, because these are the reviewer questions:
 3. **Tested the "right regime" explanation, and it is also falsified.** I hypothesised the MPC
    loses only because 2016–19 volatility was persistent, and built a vol-jump testbed
    (`experiments/regime_test.py`, `src/data.make_regime_prices`) to check. On the fixture the
-   vol-target still wins, and across the 5 real jump+revert events in train+val the MPC wins
-   **2/5** with a *worse* mean CVaR (+0.0016). See the log for the COVID near-miss: the
-   largest jump in the sample is sealed test data, so the search is hard-bounded to val_end
-   and a regression test guards that bound.
+   vol-target still wins, and across the real jump+revert events in train+val the MPC beats
+   its matched scalar in only **1/4** with a *worse* mean CVaR (+0.0058). See the log for the
+   COVID near-miss: the largest jump in the sample is sealed test data, so the search is
+   hard-bounded to val_end and a regression test guards that bound.
+   **Correction (2026-10-01):** an earlier version of this bullet said "5 events, 2/5, +0.0016".
+   Those numbers came from an ad-hoc run that no committed script reproduces. Recomputed with
+   `experiments/jump_events.py` (hard-bounded, de-clustered): **4 events, 1/4, +0.0058**.
 4. **Why the right regime doesn't help:** the budget is denominated in *trailing* vol
    (`vol_mult · σ_t`), so when vol jumps it is set from stale risk — the same trailing-window
    weakness as the baseline, on the tail instead of the mean. Beating a vol-target on a jump

@@ -25,7 +25,8 @@ experiments/run_all.py | tests/
 ## Strategy ladder (ablation)
 equal_weight, buy_hold, markowitz, equal_weight_voltarget, mpc_dd_riskaversion, mpc_naive, mpc_fc,
 mpc_fc_robust, mpc_fc_tight (core), mpc_selfcal (learned beta), mpc_tailbudget (CVaR budget,
-the paper-title mechanism), mpc_full (+regime)
+the paper-title mechanism), mpc_tailbudget_nofc (same, forecast removed = isolating control),
+mpc_full (+regime)
 Source of truth is `ALL` in experiments/run_all.py.
 
 ## Figures
@@ -85,6 +86,12 @@ Sharpe, Sortino, max drawdown, annualized return/vol, CVaR 5%, turnover, total c
   BEST-case tail and the budget never binds; (b) the R-U term is 1/(a(1-a)*S)*sum(u) - omitting
   1/S inflates it S-fold and yields over-budget solutions; (c) an infeasible budget must go to
   CASH, never back to w0 (which is fully invested = the opposite of risk-off).
+- FINDING (2026-10-01, the decisive ablation): `mpc_tailbudget_nofc` (budget ON, forecast OFF)
+  has IDENTICAL risk metrics to `mpc_tailbudget` (CVaR p=0.61, Sharpe p=0.62, maxDD p=0.87) but
+  4x lower turnover/cost. So the forecaster is a pure drag here. AND the nofc stack still does
+  NOT beat equal_weight_voltarget (CVaR p=0.14, Sharpe p=0.95). The ONE robust significant effect
+  is budget-vs-exposure-cap on CVaR (p=0.001, vs both mpc_selfcal and nofc). Title is a MECHANISM
+  claim only; as a superiority claim it is FALSIFIED. See docs/experiment_log.md.
 - DATA POLICY: reported numbers come from real NSE prices only (10 tickers, cached in data/raw).
   The simulated generator (cfg['synthetic']) exists solely so the test suite runs offline; every
   one of its parameters is in the config, and the runner prints a warning banner on synthetic runs.

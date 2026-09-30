@@ -121,6 +121,19 @@ class MPCSelfCalStrategy(MPCStrategy):
         self.log = []
         self.last_cvar_budget = None
         self.last_cvar_used = None
+        # forecaster ON by default; mpc_tailbudget_nofc sets this False (see _blend_mu)
+        self.use_forecast = True
+
+    def _blend_mu(self, hist_mu, pred):
+        """Blend the forecast into the drift estimate.
+
+        Normally the standard convex blend. When `use_forecast=False` (mpc_tailbudget_nofc)
+        this returns the historical mean, which isolates the FORECAST while keeping the
+        tail-risk budget and the whole self-calibration loop intact.
+        """
+        if not self.use_forecast:
+            return hist_mu
+        return self.mu_shrink * pred + (1 - self.mu_shrink) * hist_mu
 
     def _compute_budget(self, R, ratio, beta_t):
         """Tail-risk budget for the current day, or None to disable the CVaR constraint.
@@ -144,7 +157,7 @@ class MPCSelfCalStrategy(MPCStrategy):
             self.conformal.update(hist.values[-1], self._last_pred)
         self._last_pred = pred
 
-        mu = self.mu_shrink * pred + (1 - self.mu_shrink) * hist_mu
+        mu = self._blend_mu(hist_mu, pred)
         z = norm.ppf(1.0 - self.conformal.alpha / 2.0)
         hw = self.conformal.halfwidth(fallback=self.forecaster.resid_std * z)
 
@@ -170,6 +183,7 @@ class MPCSelfCalStrategy(MPCStrategy):
             "breach_freq": self.beta_state.breach_frequency(),
             "cvar_budget": budget,
             "cvar_used": None,          # filled in by the subclass after the solve
+            "use_forecast": int(self.use_forecast),
         })
         w = self.ctrl.solve(w_prev, mu, cov, halfwidth=hw, kappa=self.kappa,
                             max_exposure=exposure, vol_cap=vol_cap, cvar_budget=budget)
@@ -212,7 +226,7 @@ class MPCTailBudgetStrategy(MPCSelfCalStrategy):
     only); beta_t is settled through day t-1; the scenario shocks are fixed by seed.
     """
 
-    def __init__(self, cfg, n_assets, name="mpc_tailbudget", seed=0):
+    def __init__(self, cfg, n_assets, name="mpc_tailbudget", seed=0, use_forecast=True):
         super().__init__(cfg, n_assets, name=name, seed=seed)
         cb = cfg["cvar_budget"]
         self.vol_mult = float(cb["vol_mult"])
@@ -221,6 +235,10 @@ class MPCTailBudgetStrategy(MPCSelfCalStrategy):
         self.cb_min_scale = float(cb["min_scale"])
         # scenario seed is fixed and strategy-specific -> reproducible, still no look-ahead
         self.cb_seed = seed + 9973
+        # `use_forecast=False` is the ISOLATING CONTROL (mpc_tailbudget_nofc): drop the
+        # return forecast from the objective while keeping the tail-risk budget and the
+        # whole uncertainty/self-calibration loop. See _blend_mu.
+        self.use_forecast = use_forecast
 
     def _compute_budget(self, R, ratio, beta_t):
         sigma_t = float(np.std(R.mean(axis=1)))            # trailing equal-weight vol

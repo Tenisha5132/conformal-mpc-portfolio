@@ -224,3 +224,58 @@ def test_weights_stay_in_the_simplex():
     assert (w >= -1e-8).all(), "negative weights"
     assert (w.sum(axis=1) <= 1.0 + 1e-6).all(), "leverage above 1"
     assert (w <= cfg["mpc"]["max_weight"] + 1e-6).all(), "breached max_weight"
+
+
+# ------------------------------------------------- the forecaster-off control
+
+def test_nofc_blend_returns_the_historical_mean():
+    """The control must remove the forecast and ONLY the forecast from the drift."""
+    cfg = _cfg()
+    r = get_returns(n_assets=5, seed=1)
+    s = MPCTailBudgetStrategy(cfg, r.shape[1], seed=cfg["seed"], use_forecast=False)
+    hist_mu = np.array([0.01, -0.02, 0.0, 0.03, -0.01])
+    pred = np.array([9.0, 9.0, 9.0, 9.0, 9.0])
+    np.testing.assert_allclose(s._blend_mu(hist_mu, pred), hist_mu)
+
+
+def test_fc_blend_uses_the_forecast():
+    cfg = _cfg()
+    r = get_returns(n_assets=5, seed=1)
+    s = MPCTailBudgetStrategy(cfg, r.shape[1], seed=cfg["seed"], use_forecast=True)
+    hist_mu = np.zeros(5)
+    pred = np.ones(5)
+    ms = cfg["forecaster"]["mu_shrink"]
+    np.testing.assert_allclose(s._blend_mu(hist_mu, pred), np.full(5, ms))
+
+
+def test_nofc_keeps_the_whole_uncertainty_loop():
+    """The control isolates the FORECAST, not the self-calibration machinery."""
+    cfg = _cfg()
+    r = get_returns(n_assets=5, seed=1)
+    s = MPCTailBudgetStrategy(cfg, r.shape[1], seed=cfg["seed"], use_forecast=False)
+    R = r.values[-60:]
+    # budget still vol-scaled and still shrinks with beta*ratio
+    base = s._compute_budget(R, 1.0, 0.0)
+    assert base == pytest.approx(s.vol_mult * float(np.std(R.mean(axis=1))))
+    assert s._compute_budget(R, 2.0, 1.0) < base
+    # the learned beta state and the conformal/ensemble signals are all still present
+    assert s.beta_state is not None and s.conformal is not None and s.ensemble is not None
+
+
+def test_nofc_still_respects_its_budget_in_a_backtest():
+    cfg = _cfg()
+    r = get_returns(n_assets=5, seed=1)
+    s = MPCTailBudgetStrategy(cfg, r.shape[1], seed=cfg["seed"], use_forecast=False)
+    run_backtest(r, s, r.index[-500], r.index[-1], cfg["backtest"]["cost_bps"])
+    used = [row["cvar_used"] for row in s.log if row["cvar_budget"]]
+    bud = [row["cvar_budget"] for row in s.log if row["cvar_budget"]]
+    assert len(used) > 50
+    assert all(u <= b * 1.05 for u, b in zip(used, bud)), "control violated its own budget"
+
+
+def test_nofc_respects_no_lookahead():
+    cfg = _cfg()
+    r = get_returns(n_assets=5, seed=1)
+    check_no_lookahead(
+        lambda: MPCTailBudgetStrategy(cfg, r.shape[1], seed=cfg["seed"], use_forecast=False),
+        r, 800)

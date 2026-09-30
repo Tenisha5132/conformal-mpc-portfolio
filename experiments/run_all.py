@@ -22,7 +22,7 @@ from src.utils import load_config, make_run_dir, save_config, set_seed
 
 ALL = ["equal_weight", "buy_hold", "markowitz", "equal_weight_voltarget", "mpc_naive",
        "mpc_dd_riskaversion", "mpc_fc", "mpc_fc_robust", "mpc_fc_tight", "mpc_selfcal",
-       "mpc_tailbudget", "mpc_full"]
+       "mpc_tailbudget", "mpc_tailbudget_nofc", "mpc_full"]
 
 
 def build(name, cfg, n):
@@ -51,6 +51,9 @@ def build(name, cfg, n):
         return MPCSelfCalStrategy(cfg, n, name=name, seed=cfg["seed"])
     if name == "mpc_tailbudget":
         return MPCTailBudgetStrategy(cfg, n, name=name, seed=cfg["seed"])
+    if name == "mpc_tailbudget_nofc":
+        # isolating control: budget ON, return forecast OFF
+        return MPCTailBudgetStrategy(cfg, n, name=name, seed=cfg["seed"], use_forecast=False)
     return MPCStrategy(cfg, n, name=name, seed=cfg["seed"], **flags)
 
 

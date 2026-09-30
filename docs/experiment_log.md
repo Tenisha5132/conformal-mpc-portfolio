@@ -371,3 +371,72 @@ the prediction the mechanism makes.** Sharpe/drawdown are not significantly diff
 - vol_mult was fixed from TRAIN and never tuned on val. Do not tune it on val returns.
 - `beta_t` alone is inert (scale uses `max(ratio-1,0)`, so beta with ratio=1 does nothing);
   the levers are multiplicative, matching `tighten_limits`.
+
+## 2026-10-01 — the forecaster-off control: what the paper can and cannot claim
+
+The `mpc_tailbudget` ablation showed the CVaR budget beats the exposure cap on the tail
+(p=0.001), but `equal_weight_voltarget` still beat BOTH on CVaR. That raised an obvious
+question this log had not answered: **is the MPC layer adding anything, or is the forecaster
+just paying for itself with turnover?**
+
+Since the ridge forecaster has NO skill here (mean per-asset corr(pred, realized) ~= -0.035),
+the forecast entering the objective is close to noise. If it is noise, then removing it should
+not hurt - and if the MPC still loses to a scalar vol-targeting rule without it, the whole
+optimization layer is decorative.
+
+Added `mpc_tailbudget_nofc`: identical to `mpc_tailbudget` EXCEPT `_blend_mu` returns the
+historical mean instead of `mu_shrink*pred + (1-mu_shrink)*hist_mu`. It keeps the conformal
+budget, the learned beta_t, the ensemble disagreement, the scenario set, and the cost model.
+Only the return forecast is removed. This isolates the forecast, not the uncertainty loop.
+
+### Result (validation 2016-2019, real NSE, 10bps, 2000-block paired bootstrap)
+
+| strategy | Sharpe | ann vol | CVaR 5% | maxDD | turnover | total cost |
+|---|---|---|---|---|---|---|
+| equal_weight_voltarget | 1.302 | 0.1050 | -0.0131 | -10.7% | 0.014 | 1.34% |
+| mpc_fc (forecaster, no budget) | 1.124 | 0.1251 | -0.0171 | -15.6% | 0.035 | 3.43% |
+| mpc_selfcal | 1.091 | 0.1204 | -0.0166 | -15.2% | 0.036 | 3.54% |
+| mpc_tailbudget (forecast ON) | 1.196 | 0.1113 | -0.0150 | -14.6% | 0.036 | 3.54% |
+| **mpc_tailbudget_nofc (forecast OFF)** | **1.265** | 0.1105 | **-0.0148** | -14.7% | **0.009** | **0.89%** |
+
+Paired bootstrap:
+
+- nofc vs mpc_tailbudget (forecast ON vs OFF): CVaR +0.00025, p=0.606; Sharpe +0.069, p=0.622;
+  maxDD p=0.869. **The forecast makes NO significant difference to any metric.**
+- nofc vs mpc_selfcal (budget vs exposure cap): CVaR +0.00185, p=0.001. Significant.
+- nofc vs equal_weight_voltarget: CVaR -0.0017, p=0.142; Sharpe p=0.953; maxDD p=0.836.
+  **Still NOT significantly better than the scalar baseline.**
+
+Stress-conditional (independent train-fitted rule, val): nofc stress CVaR -0.0225, worst day
+-0.0417 (vs tailbudget -0.0234/-0.0395, selfcal -0.0259/-0.0436, voltarget -0.017/-0.021).
+The nofc control has the best stress CVaR of the three MPC budget variants.
+
+### VERDICT: the forecaster is a drag, and the MPC layer does not beat vol-targeting
+
+1. **Removing the forecast is free.** CVaR, Sharpe, and maxDD are statistically identical
+   (all p>0.6) with the forecast OFF, and it cuts turnover 4x (0.036 -> 0.009) and cost 4x
+   (3.54% -> 0.89%). So the ridge forecaster contributes exactly nothing here except cost.
+   This is the sharpest confirmation yet of the "forecasting does not add alpha here" finding.
+2. **The tail-risk budget is the real contribution.** The one robust, significant effect is
+   budget-vs-exposure-cap on CVaR (p=0.001, twice now: vs selfcal and vs nofc). Targeting the
+   tail via R-U genuinely beats shrinking a mean-exposure cap, and this survives with the
+   forecast removed.
+3. **BUT the MPC layer still does not beat `equal_weight_voltarget`** on CVaR (p=0.142, not
+   significant), Sharpe (p=0.953), or maxDD (p=0.836) - even with the forecast removed. The
+   simple inverse-vol-scaled equal-weight baseline remains statistically indistinguishable
+   from (and point-estimate-better than) the whole MPC stack on every headline metric.
+
+### What this means for the paper title
+
+"Self-Calibrating Uncertainty-Aware MPC for Tail-Risk Budgeting in Portfolios" is NOT
+supported as a performance claim. It is supported as a MECHANISM claim only:
+- Self-calibrating: YES - beta_t learned online, budget shrinks with breaches + uncertainty.
+- Uncertainty-aware: YES - ACI drives the budget, calibrated (0.898 vs 0.90 target).
+- Tail-risk budgeting: YES - hard R-U CVaR cap, live (binds 52-54% of days), 0 violations,
+  beats the exposure-cap ablation at p=0.001.
+- "...for portfolios" implying it improves portfolio risk: NO - it does not significantly beat
+  a scalar vol-targeting baseline on this data/window.
+
+The title needs either (a) softening to a mechanism/framework claim, or (b) more data/universe
+where MPC might win. It should NOT stand as a superiority claim. This is a falsification of
+the headline, recorded before touching test. Do not rescue it by tuning vol_mult on val.

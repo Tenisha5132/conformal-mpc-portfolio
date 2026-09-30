@@ -165,6 +165,7 @@ Each rung adds exactly one element, so its contribution is measurable. `ALL` in
 | `mpc_fc_tight` | **+ uncertainty-driven tightening (core)** |
 | `mpc_selfcal` | learned `β_t` + ensemble disagreement |
 | **`mpc_tailbudget`** | **+ hard CVaR(5%) tail-risk budget (title mechanism)** |
+| `mpc_tailbudget_nofc` | the same, **forecast removed** — isolating control |
 | `mpc_full` | + regime layer |
 
 ---
@@ -187,6 +188,7 @@ intervals are 95% stationary block bootstrap (2000 resamples, mean block 10 days
 | `mpc_fc_tight` (core) | 1.073 | [0.11, 2.07] | −0.0163 | −14.6% |
 | `mpc_selfcal` | 1.091 | [0.12, 2.09] | −0.0166 | −15.2% |
 | **`mpc_tailbudget`** | **1.196** | [0.21, 2.20] | **−0.0150** | **−14.6%** |
+| `mpc_tailbudget_nofc` | 1.265 | [0.23, 2.30] | −0.0148 | −14.7% |
 | `mpc_full` | 1.160 | [0.18, 2.16] | −0.0151 | −13.6% |
 
 **No Sharpe difference is statistically significant.** Bootstrap Sharpe noise is roughly ±0.9;
@@ -202,6 +204,22 @@ every observed gap is 0.1–0.4. The significant effects are all in risk:
 - versus `equal_weight_voltarget`, `mpc_fc_tight` is **worse** on CVaR (p = 0.004), and
   `mpc_tailbudget` is still behind it (diff −0.0019, **p = 0.082**, not significant). The
   simple volatility-targeted baseline remains the hardest thing to beat on tails.
+
+**The forecaster is a drag, and we can now prove it.** `mpc_tailbudget_nofc` is
+`mpc_tailbudget` with exactly one change: `_blend_mu` returns the historical mean instead of
+the forecast. It keeps the budget, `beta_t`, the ensemble, the scenarios, and the costs.
+
+| nofc vs … | CVaR diff | p | Sharpe diff | p |
+|---|---|---|---|---|
+| `mpc_tailbudget` (forecast on) | +0.00025 | 0.61 | +0.069 | 0.62 |
+| `mpc_selfcal` (exposure cap) | **+0.00185** | **0.001** | +0.174 | 0.17 |
+| `equal_weight_voltarget` | −0.0017 | 0.14 | −0.037 | 0.95 |
+
+Removing the forecast changes **nothing** statistically (every p > 0.6) while cutting turnover
+4× (0.036 → 0.009) and cost 4× (3.54% → 0.89%). So the forecaster contributes nothing here
+except cost — and the one significant effect remains budget-vs-exposure-cap on the tail. But
+even with the forecast removed, the MPC stack **still does not significantly beat
+`equal_weight_voltarget`** on CVaR (p = 0.14), Sharpe (p = 0.95), or maxDD (p = 0.84).
 
 **Conformal calibration works.** ACI empirical coverage is **0.8984** against a 0.90 target on
 this validation window; per-asset `α_t` settles in [0.066, 0.121] around a mean of 0.0925.
@@ -282,9 +300,15 @@ Stated plainly, because these are the reviewer questions:
 1. **Forecasting does not add alpha here.** Mean per-asset `corr(ŷ, r)` ≈ **−0.035** on this
    window; true daily AR(1) averages ~0.004. Sharpe degrades monotonically as `mu_shrink` rises,
    which is what you expect when the forecast is near-noise. Do not claim the forecaster helps.
-2. **A much simpler baseline wins on tails.** `equal_weight_voltarget` has the best CVaR
-   (−0.0131) and the shallowest max drawdown (−10.7%) of every strategy tested, and no MPC
-   variant beats it on stress-day CVaR. The MPC ladder does improve *within* itself.
+2. **A much simpler baseline wins on tails — and the MPC layer still cannot beat it, even
+   without the forecaster.** `equal_weight_voltarget` has the best CVaR (−0.0131) and the
+   shallowest max drawdown (−10.7%) of every strategy tested, and no MPC variant beats it on
+   stress-day CVaR. This is not a forecasting artifact: `mpc_tailbudget_nofc` strips the
+   forecast out and the MPC stack is *still* statistically indistinguishable from (and
+   point-estimate-better by) the scalar baseline (CVaR p = 0.14, Sharpe p = 0.95, maxDD
+   p = 0.84). The MPC ladder improves *within itself*, but not against vol-targeting. A
+   reviewer will read `equal_weight_voltarget` and ask why the MPC exists; the current honest
+   answer is "it costs more and does not yet do better here."
 3. **Likely reason:** 2016–2019 volatility was persistent enough for a slow estimator to track
    — precisely the regime where vol-targeting wins and reactive tightening has least to add.
    The honest next experiment is where vol-targeting *fails*: volatility-jump or mean-reverting
@@ -294,6 +318,12 @@ Stated plainly, because these are the reviewer questions:
 5. **Sharpe is dominated by seed noise.** Intervals of ±0.9 make this a tail-risk study, not a
    return study.
 6. **The test period has never been examined.** None of the above is confirmed out of sample.
+7. **The title is a mechanism claim, not a performance claim.** "Self-Calibrating
+   Uncertainty-Aware MPC for Tail-Risk Budgeting" is supported as a *mechanism* (the budget is
+   real, live, calibrated, and beats the exposure-cap ablation at p = 0.001), but **not** as a
+   claim that this improves portfolios over a simple baseline. Taken as a superiority claim,
+   the title is falsified. Soften it, or gather data where the MPC has room to win — do not
+   rescue it by tuning `vol_mult` on validation returns.
 
 ---
 

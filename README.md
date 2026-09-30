@@ -309,16 +309,25 @@ Stated plainly, because these are the reviewer questions:
    p = 0.84). The MPC ladder improves *within itself*, but not against vol-targeting. A
    reviewer will read `equal_weight_voltarget` and ask why the MPC exists; the current honest
    answer is "it costs more and does not yet do better here."
-3. **Likely reason:** 2016–2019 volatility was persistent enough for a slow estimator to track
-   — precisely the regime where vol-targeting wins and reactive tightening has least to add.
-   The honest next experiment is where vol-targeting *fails*: volatility-jump or mean-reverting
-   regimes.
-4. **Single market, single window, four years, ten large caps.** No cross-asset or
+3. **Tested the "right regime" explanation, and it is also falsified.** I hypothesised the MPC
+   loses only because 2016–19 volatility was persistent, and built a vol-jump testbed
+   (`experiments/regime_test.py`, `src/data.make_regime_prices`) to check. On the fixture the
+   vol-target still wins, and across the 5 real jump+revert events in train+val the MPC wins
+   **2/5** with a *worse* mean CVaR (+0.0016). See the log for the COVID near-miss: the
+   largest jump in the sample is sealed test data, so the search is hard-bounded to val_end
+   and a regression test guards that bound.
+4. **Why the right regime doesn't help:** the budget is denominated in *trailing* vol
+   (`vol_mult · σ_t`), so when vol jumps it is set from stale risk — the same trailing-window
+   weakness as the baseline, on the tail instead of the mean. Beating a vol-target on a jump
+   needs a genuinely forward-looking risk signal (implied vol, a jump model), which is not
+   available in this data. This is a design limitation, not a tuning problem.
+5. **Single market, single window, four years, ten large caps.** No cross-asset or
    cross-market replication.
-5. **Sharpe is dominated by seed noise.** Intervals of ±0.9 make this a tail-risk study, not a
+6. **Sharpe is dominated by seed noise.** Intervals of ±0.9 make this a tail-risk study, not a
    return study.
-6. **The test period has never been examined.** None of the above is confirmed out of sample.
-7. **The title is a mechanism claim, not a performance claim.** "Self-Calibrating
+7. **The test period has never been examined.** None of the above is confirmed out of sample.
+   (The vol-jump search is explicitly hard-bounded to `val_end` for exactly this reason.)
+8. **The title is a mechanism claim, not a performance claim.** "Self-Calibrating
    Uncertainty-Aware MPC for Tail-Risk Budgeting" is supported as a *mechanism* (the budget is
    real, live, calibrated, and beats the exposure-cap ablation at p = 0.001), but **not** as a
    claim that this improves portfolios over a simple baseline. Taken as a superiority claim,

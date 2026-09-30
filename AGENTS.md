@@ -92,6 +92,15 @@ Sharpe, Sortino, max drawdown, annualized return/vol, CVaR 5%, turnover, total c
   NOT beat equal_weight_voltarget (CVaR p=0.14, Sharpe p=0.95). The ONE robust significant effect
   is budget-vs-exposure-cap on CVaR (p=0.001, vs both mpc_selfcal and nofc). Title is a MECHANISM
   claim only; as a superiority claim it is FALSIFIED. See docs/experiment_log.md.
+- FALSIFIED (2026-10-01, third record): the "right regime" hypothesis - that MPC beats
+  vol-targeting when vol JUMPS and mean-reverts - is FALSE. Fixture: voltarget still wins
+  (Sharpe .338/CVaR -.0176 vs nofc .235/-.0190). Real: only 5 jump+revert events in train+val,
+  nofc wins 2/5, mean CVaR WORSE (+0.0016). ROOT CAUSE: the budget is denominated in TRAILING
+  vol (vol_mult*sigma_t) so it lags a jump exactly like the baseline; beating it needs a
+  forward-looking risk signal (implied vol/jump model), not available here.
+  TRAP: the largest vol jump in the sample is Dec-2019->Mar-2020 (COVID, x6.94) = SEALED TEST.
+  `find_real_jump_window` takes a mandatory `search_end` bound; do not remove it, and keep
+  tests/test_regime_test.py::test_jump_search_never_reaches_past_the_bound.
 - DATA POLICY: reported numbers come from real NSE prices only (10 tickers, cached in data/raw).
   The simulated generator (cfg['synthetic']) exists solely so the test suite runs offline; every
   one of its parameters is in the config, and the runner prints a warning banner on synthetic runs.

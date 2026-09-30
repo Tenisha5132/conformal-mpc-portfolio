@@ -440,3 +440,73 @@ supported as a performance claim. It is supported as a MECHANISM claim only:
 The title needs either (a) softening to a mechanism/framework claim, or (b) more data/universe
 where MPC might win. It should NOT stand as a superiority claim. This is a falsification of
 the headline, recorded before touching test. Do not rescue it by tuning vol_mult on val.
+
+## 2026-10-01 — vol-jump regime test: the hypothesis is FALSIFIED (twice)
+
+The `mpc_tailbudget_nofc` result said the forecaster is a drag and the MPC still loses to
+vol-targeting. I hypothesised the reason was the REGIME: 2016-2019 volatility was persistent,
+which favours a trailing-vol estimator. In a regime where vol JUMPS and then mean-reverts, a
+reactive tail-risk budget should beat scalar vol-targeting. I built the test to check this
+rather than assuming it. It does not hold.
+
+### 1. Synthetic mechanism test (`--synthetic`, NOT reportable)
+
+`src/data.make_regime_prices`: deterministic block schedule calm -> spike -> decay, vol 0.008
+-> 0.040 (5x) -> geometric decay. `momentum=0.0` so predictability cannot confound the risk
+control. Full-sample: `equal_weight_voltarget` Sharpe 0.338 / CVaR -0.0176, `mpc_tailbudget_nofc`
+Sharpe 0.235 / CVaR -0.0190, `mpc_tailbudget` Sharpe 0.072 / CVaR -0.0196. On the SPIKE phase
+the MPC variants are marginally better (CVaR -0.0062 vs voltarget -0.0102), but in the DECAY
+phase voltarget wins outright (-0.0241 vs -0.0262) and the vol-target's shallower drawdown
+dominates. Net: hypothesis NOT supported even on the fixture built to favour it.
+
+### 2. Real data, and a test-period trap
+
+`find_real_jump_window` selects jump+revert events by a rule fixed BEFORE seeing any strategy
+result. On the FULL frame the largest jump is **x6.94, peaking 2020-03 - the COVID crash,
+which is SEALED TEST data.** An unbounded search would have silently grabbed the single event
+most likely to flatter the method, from data we agreed never to touch. `search_end` now HARD
+-BOUNDS the search to val_end, and `tests/test_regime_test.py` asserts the bound is respected
+(the guard test fails if someone removes it).
+
+Within train+val the best available jump is only **x2.16 (Oct 2018)** - a much weaker event
+than COVID. De-clustered to peaks >40d apart, there are 5 qualifying jump+revert events.
+
+### 3. Real result: MPC loses in 3 of 5 jump events
+
+| event (peak) | voltarget CVaR | nofc CVaR | tailbudget CVaR |
+|---|---|---|---|
+| 2013-09-13 | 0.0147 | 0.0210 | 0.0202 |
+| 2015-09-09 | 0.0176 | 0.0158 | 0.0161 |
+| 2016-03-02 | 0.0139 | 0.0078 | 0.0096 |
+| 2017-11-08 | 0.0131 | 0.0146 | 0.0150 |
+| 2018-10-29 | 0.0132 | 0.0214 | 0.0205 |
+
+nofc beats voltarget on CVaR in **2/5** events, mean diff **+0.00164 (worse)**. On the largest
+event (2018-10-29) the MPC is dramatically worse (0.0214 vs 0.0132). The single best window
+run in isolation (2018-07..2019-05) shows the same: voltarget Sharpe 1.73 / CVaR -0.0134 vs
+nofc Sharpe 1.14 / CVaR -0.0219. n=5 events is small and cannot prove a null, but the
+direction is consistent with the synthetic result and the full-period result.
+
+### WHY the hypothesis failed (the real lesson)
+
+The budget is denominated in TRAILING vol (`vol_mult * sigma_t`). When vol jumps, sigma_t lags,
+so the budget is set from stale risk. It has the SAME trailing-window weakness as the vol
+target it is meant to beat, just on the tail instead of the mean. A genuinely forward-looking
+risk signal (implied vol, a jump model, an option surface) would be needed to actually lead
+the jump - and none is available here. This is a design limitation, not a tuning problem, and
+it is worth stating plainly rather than papering over.
+
+### Bottom line for the paper
+
+The title now has THREE falsification records, all on validation, all before test:
+1. `docs/hypothesis.md` (matched-vol, beat voltarget) - falsified on the full val period.
+2. `mpc_tailbudget_nofc` (strip the forecast) - forecaster is a pure drag, MPC still ties
+   voltarget (p=0.14 CVaR).
+3. Vol-jump regime test - the "regime where we win" hypothesis is falsified on both the
+   fixture and real data (2/5 events, mean worse).
+
+The tail-risk budget is still a real, calibrated, live mechanism that beats the exposure-cap
+ablation at p=0.001. But there is NO regime found in which the MPC stack beats a simple
+volatility-targeted equal-weight baseline. The honest, defensible paper is a MECHANISM /
+negative-result paper, not a performance claim. Do not rescue the title by tuning vol_mult,
+eta, or the event window on these results.

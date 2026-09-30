@@ -27,6 +27,62 @@ def download_prices(tickers, start, end, cache_dir="data/raw", force=False,
     return prices
 
 
+def make_regime_prices(cfg, seed=0, regime_cfg=None):
+    """Block regime generator with a VOLATILITY JUMP, for the regime testbed.
+
+    OFFLINE MECHANISM TEST FIXTURE ONLY - never report results computed on this data.
+
+    This exists to answer one question: does a volatility-targeting rule crash on a regime
+    where volatility JUMPS and then partially reverts, where a tail-risk budget that reacts
+    to uncertainty does not? It is deliberately built to be *favourable* to the volatility
+    target being challenged only in the documented way: the jump is a real property of
+    markets, not a rigged one. All parameters come from `regime_cfg` (default
+    cfg['regime_test']) - there are no magic numbers here.
+
+    Design, in contrast to `make_synthetic_prices`:
+      * volatility follows a deterministic BLOCK schedule (calm -> spike -> decay), not a
+        two-state Markov chain, so we control exactly when the jump happens;
+      * after the spike, volatility DECAYS toward calm (mean reversion). This is the part
+        that hurts a trailing-vol estimator: it keeps cutting exposure after risk has
+        already fallen, and keeps re-levering into the next calm stretch.
+    """
+    rc = regime_cfg if regime_cfg is not None else cfg["regime_test"]
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range(rc["start"], rc["end"])
+    n, n_assets = len(idx), rc["n_assets"]
+    vol = np.empty(n)
+    t, block, phase = 0, 0, "calm"
+    while t < n:
+        if phase == "calm":
+            L = rc["calm_len"]
+            vol[t:t + L] = rc["vol_calm"]
+            t += L
+            phase = "spike"
+        elif phase == "spike":
+            L = rc["spike_len"]
+            # vol ramps up over the spike so the jump is a ramp, not an instant
+            ramp = np.linspace(rc["vol_calm"], rc["vol_spike"], L)
+            vol[t:t + L] = ramp
+            t += L
+            phase = "decay"
+        else:  # decay
+            L = rc["decay_len"]
+            # geometric decay back toward calm - the mean reversion the vol-target misses
+            decay = rc["vol_spike"] * (rc["decay_rate"] ** np.arange(L))
+            vol[t:t + L] = np.maximum(decay, rc["vol_calm"])
+            t += L
+            phase = "calm"
+        block += 1
+    vol = vol[:n]
+    mkt = rc["drift"] + vol * rng.standard_normal(n)
+    beta = rng.uniform(rc["beta_low"], rc["beta_high"], n_assets)
+    idio = rc["idio_vol"] * rng.standard_normal((n, n_assets))
+    r = mkt[:, None] * beta[None, :] + idio
+    r[1:] += rc["momentum"] * r[:-1]
+    prices = rc["price_base"] * np.cumprod(1 + r, axis=0)
+    return pd.DataFrame(prices, index=idx, columns=[f"R{i}" for i in range(n_assets)])
+
+
 def make_synthetic_prices(cfg, seed=0) -> pd.DataFrame:
     """Simulated two-regime market. OFFLINE TEST FIXTURE ONLY.
 

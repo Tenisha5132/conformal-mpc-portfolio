@@ -21,6 +21,26 @@ synthetic:
   vol_calm: 0.008         # daily market vol per regime
   vol_stress: 0.024
   drift: 0.0004           # unconditional daily market drift
+
+# Regime testbed (OFFLINE MECHANISM FIXTURE - never reportable). A deterministic block
+# schedule of calm -> volatility spike -> decay, to test whether a tail-risk budget beats a
+# volatility-targeting rule when vol jumps and mean-reverts. See src/data.make_regime_prices.
+regime_test:
+  n_assets: 10
+  start: "2012-01-02"
+  end: "2025-12-31"
+  calm_len: 200           # trading days of calm before each jump
+  spike_len: 40           # days for vol to ramp from calm to the spike
+  decay_len: 120          # days of geometric decay back toward calm
+  vol_calm: 0.008         # daily market vol during calm
+  vol_spike: 0.040        # daily market vol at the top of the spike (5x calm)
+  decay_rate: 0.985       # per-day multiplicative decay during the decay phase
+  drift: 0.0004
+  beta_low: 0.6
+  beta_high: 1.2
+  idio_vol: 0.004
+  momentum: 0.0           # no autocorr: isolate the risk-control effect from predictability
+  price_base: 100.0
   beta_low: 0.6           # asset market betas ~ U(beta_low, beta_high)
   beta_high: 1.4
   idio_vol: 0.010         # daily idiosyncratic vol

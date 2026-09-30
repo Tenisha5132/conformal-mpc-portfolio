@@ -24,7 +24,8 @@ experiments/run_all.py | tests/
 
 ## Strategy ladder (ablation)
 equal_weight, buy_hold, markowitz, equal_weight_voltarget, mpc_dd_riskaversion, mpc_naive, mpc_fc,
-mpc_fc_robust, mpc_fc_tight (core), mpc_selfcal (learned beta), mpc_full (+regime)
+mpc_fc_robust, mpc_fc_tight (core), mpc_selfcal (learned beta), mpc_tailbudget (CVaR budget,
+the paper-title mechanism), mpc_full (+regime)
 Source of truth is `ALL` in experiments/run_all.py.
 
 ## Figures
@@ -72,6 +73,18 @@ Sharpe, Sortino, max drawdown, annualized return/vol, CVaR 5%, turnover, total c
   geometric mean is too conservative (needs BOTH arms to move) and delta=0.01 starves the loop of
   feedback (~11 breaches in 983d). Do NOT tune eta/loss_threshold/delta against val returns to fix
   this; see docs/experiment_log.md. A weaker baseline (equal_weight_voltarget) beats it on tails.
+- mpc_tailbudget (src/mpc.py `scenario_returns`/`cvar_of_paths`, src/strategies.py
+  MPCTailBudgetStrategy): HARD daily CVaR(5%) budget via the Rockafellar-Uryasev epigraph over a
+  FIXED 200-scenario Gaussian set. Stays a QP (fixed shocks => loss is linear in w) and uses
+  CLARABEL with tight tolerances, because the default solver returns `optimal_inaccurate` and
+  VIOLATES the budget by ~20%. budget = vol_mult * sigma_t * 1/(1+beta_t*(ratio_t-1)); vol_mult=1.6
+  is TRAIN-calibrated (realized CVaR/vol ~2.0-2.17) so the constraint is LIVE, not slack.
+  Beats mpc_selfcal on CVaR by 0.0016 (paired bootstrap p=0.001) - the one-line ablation.
+  Does NOT beat equal_weight_voltarget (p=0.082). docs/hypothesis.md is still falsified.
+  TRAPS: (a) loss = -return, so the CVaR tail is the UPPER end - `quantile(alpha)` measures the
+  BEST-case tail and the budget never binds; (b) the R-U term is 1/(a(1-a)*S)*sum(u) - omitting
+  1/S inflates it S-fold and yields over-budget solutions; (c) an infeasible budget must go to
+  CASH, never back to w0 (which is fully invested = the opposite of risk-off).
 - DATA POLICY: reported numbers come from real NSE prices only (10 tickers, cached in data/raw).
   The simulated generator (cfg['synthetic']) exists solely so the test suite runs offline; every
   one of its parameters is in the config, and the runner prints a warning banner on synthetic runs.

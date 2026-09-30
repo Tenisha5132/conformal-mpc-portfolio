@@ -103,6 +103,24 @@ exposure_cap_t = max_exposure · 1 / (1 + β·(ρ_t − 1))
 online from realized breaches. Higher uncertainty ⇒ lower cap ⇒ smaller positions ⇒ less
 drawdown risk. The optimisation stays a convex QP.
 
+**Tail-risk budget — `mpc_tailbudget`, the paper's title mechanism.** `tighten_limits` shrinks
+a *mean* exposure cap, which is a blunt instrument: it does not distinguish a mild drawdown
+from a tail event. `mpc_tailbudget` instead caps the **CVaR of the daily loss** directly, using
+the Rockafellar–Uryasev epigraph (Rockafellar & Uryasev 2000) over a fixed Gaussian scenario
+set:
+
+```
+budget_t = vol_mult · σ_t · 1/(1 + β_t·(ρ_t − 1))          σ_t = trailing equal-weight vol
+CVaR_α( loss ) ≤ budget_t                                  α = 0.05, 200 scenarios
+```
+
+The epigraph is imposed as a **constraint** with `η` free, so it adds only linear constraints
+and the problem stays a **QP** (the scenarios are fixed draws, making the loss linear in `w`).
+The same learned `β_t` and uncertainty ratio `ρ_t` that shrink the exposure cap instead shrink
+the *tail* budget. `vol_mult = 1.6` is TRAIN-calibrated: realized CVaR/vol is ~2.0–2.17, so the
+constraint is **live** at full investment (binds on 54% of days) rather than permanently slack.
+See `docs/experiment_log.md` for the three silent bugs this took.
+
 **Adaptive conformal prediction (`src/conformal.py`).** Gibbs & Candès (2021) ACI. Per-asset
 miscoverage adapts online, `α_{t+1} = α_t + γ(α − err_t)`, so the interval widens on assets
 where the model keeps being wrong and narrows where it is calibrated.
@@ -146,6 +164,7 @@ Each rung adds exactly one element, so its contribution is measurable. `ALL` in
 | `mpc_fc_robust` | + κ-penalised worst-case μ |
 | `mpc_fc_tight` | **+ uncertainty-driven tightening (core)** |
 | `mpc_selfcal` | learned `β_t` + ensemble disagreement |
+| **`mpc_tailbudget`** | **+ hard CVaR(5%) tail-risk budget (title mechanism)** |
 | `mpc_full` | + regime layer |
 
 ---
@@ -167,6 +186,7 @@ intervals are 95% stationary block bootstrap (2000 resamples, mean block 10 days
 | `mpc_fc_robust` | 1.115 | [0.14, 2.11] | −0.0170 | −15.5% |
 | `mpc_fc_tight` (core) | 1.073 | [0.11, 2.07] | −0.0163 | −14.6% |
 | `mpc_selfcal` | 1.091 | [0.12, 2.09] | −0.0166 | −15.2% |
+| **`mpc_tailbudget`** | **1.196** | [0.21, 2.20] | **−0.0150** | **−14.6%** |
 | `mpc_full` | 1.160 | [0.18, 2.16] | −0.0151 | −13.6% |
 
 **No Sharpe difference is statistically significant.** Bootstrap Sharpe noise is roughly ±0.9;
@@ -174,7 +194,14 @@ every observed gap is 0.1–0.4. The significant effects are all in risk:
 
 - `mpc_full` − `mpc_naive`: CVaR **+0.002**, paired bootstrap `p = 0.001`. The core layer helps
   *within* the MPC family.
-- versus `equal_weight_voltarget`, `mpc_fc_tight` is **worse** on CVaR (p = 0.004).
+- `mpc_tailbudget` − `mpc_selfcal`: CVaR **+0.0016**, paired bootstrap `p = 0.001`
+  (CI [0.0010, 0.0021]). These two differ by exactly one line — a hard CVaR budget in place
+  of a scalar exposure cap — so this is the cleanest evidence that *targeting the tail
+  specifically* beats shrinking the mean. Sharpe (+0.11, p = 0.24) and maxDD (p = 0.18) do not
+  differ significantly.
+- versus `equal_weight_voltarget`, `mpc_fc_tight` is **worse** on CVaR (p = 0.004), and
+  `mpc_tailbudget` is still behind it (diff −0.0019, **p = 0.082**, not significant). The
+  simple volatility-targeted baseline remains the hardest thing to beat on tails.
 
 **Conformal calibration works.** ACI empirical coverage is **0.8984** against a 0.90 target on
 this validation window; per-asset `α_t` settles in [0.066, 0.121] around a mean of 0.0925.
@@ -204,12 +231,14 @@ is sticky, collapsing into one 194-day "episode" across the 2015–16 bear marke
 | **`equal_weight_voltarget`** | −0.008 | **−0.019** | **−0.032** |
 | `mpc_naive` | −0.012 | −0.028 | −0.044 |
 | `mpc_fc` | −0.011 | −0.029 | −0.046 |
-| `mpc_fc_tight` | −0.011 | −0.027 | −0.042 |
-| `mpc_selfcal` | −0.011 | −0.027 | −0.042 |
-| `mpc_full` | −0.010 | −0.025 | −0.041 |
+| `mpc_fc_tight` | −0.011 | −0.026 | −0.044 |
+| `mpc_selfcal` | −0.011 | −0.026 | −0.044 |
+| **`mpc_tailbudget`** | **−0.010** | **−0.023** | **−0.039** |
+| `mpc_full` | −0.010 | −0.024 | −0.042 |
 
 Mean gross exposure across all 83 episodes: `equal_weight` 1.000, `mpc_naive` 0.909,
-`mpc_selfcal` 0.871, `mpc_fc_tight` 0.862, `mpc_full` 0.810, `equal_weight_voltarget` 0.734.
+`mpc_selfcal` 0.871, `mpc_tailbudget` 0.84, `mpc_fc_tight` 0.862, `mpc_full` 0.810,
+`equal_weight_voltarget` 0.734.
 Exposure does **not** dip further at +10d/+20d than at episode start — de-risking here is a
 standing posture, not a reaction, because the conformal signal moves slowly.
 
@@ -299,16 +328,20 @@ The order matters — each step was gated on the previous one.
    `tests/test_figures.py` asserts no text collisions or off-canvas elements.
 4. **Self-calibration** (`src/selfcal.py` + `mpc_selfcal`), with 22 tests, including the
    no-look-ahead harness shared with the backtest.
-5. **Stationary block bootstrap** (`src/bootstrap.py`, Politis & Romano geometric blocks).
+5. **Tail-risk budget** (`src/mpc.py` `scenario_returns`/`cvar_of_paths` + `mpc_tailbudget`),
+   the paper-title mechanism: a hard CVaR(5%) cap via the Rockafellar–Uryasev epigraph that
+   keeps the problem a QP. 19 dedicated tests, including budget-respected, budget-binds,
+   solver-status, and cash-on-infeasible-budget.
+6. **Stationary block bootstrap** (`src/bootstrap.py`, Politis & Romano geometric blocks).
    Verified before use: realized mean block length **9.93** against a target of 10, lag-1
    adjacent-index rate 0.886 confirming dependence preservation. Paired differences reuse one
    shared resampled index sequence per replicate.
-6. **Independent stress labels** (`src/stress.py`, `docs/stress_definition.md`), train-fitted
+7. **Independent stress labels** (`src/stress.py`, `docs/stress_definition.md`), train-fitted
    and frozen.
-7. **Stress-conditional and per-episode analysis** (`experiments/regime_conditional.py`): all
+8. **Stress-conditional and per-episode analysis** (`experiments/regime_conditional.py`): all
    83 episodes on shared axes, plus a mean-exposure plot aligned at episode start. Max drawdown
    is deliberately omitted on non-contiguous subsets.
-8. **Log everything** in `docs/experiment_log.md`, including the null results and the bugs.
+9. **Log everything** in `docs/experiment_log.md`, including the null results and the bugs.
 
 ---
 
@@ -327,6 +360,7 @@ src/
   mpc.py                    CVXPY controller + tighten_limits (the core)
   regime.py                 VolRegimeDetector — calm/stress "market mood"
   selfcal.py                BetaState, DisagreementEnsemble, uncertainty ratio
+  strategies.py             ablation ladder; MPCTailBudgetStrategy = title mechanism
   strategies.py             the ablation ladder
   stress.py                 independent stress labels + episodes
   bootstrap.py              stationary block bootstrap

@@ -4,6 +4,8 @@
   mpc_fc               + learned forecaster
   mpc_fc_robust        + conformal (adaptive) intervals, worst-case mu = mu - kappa*halfwidth
   mpc_fc_tight         + uncertainty-tightened risk limits            <- core novelty
+  mpc_selfcal          + learned beta_t, ensemble-disagreement ratio
+  mpc_tailbudget       + HARD CVaR(5%) tail-risk budget (R-U)          <- paper title
   mpc_full             + regime-aware (calm/stress) parameters        <- add-on #1
 """
 from collections import deque
@@ -15,7 +17,7 @@ from scipy.stats import norm
 from src.conformal import AdaptiveConformal
 from src.estimators import shrunk_cov
 from src.forecaster import build_forecaster
-from src.mpc import MPCController, tighten_limits
+from src.mpc import MPCController, cvar_budget_scale, tighten_limits
 from src.regime import VolRegimeDetector
 from src.selfcal import BetaState, DisagreementEnsemble, uncertainty_ratio
 
@@ -117,6 +119,16 @@ class MPCSelfCalStrategy(MPCStrategy):
         self.dis_history = deque(maxlen=int(cfg["ensemble"]["history"]))
         # per-run logs (populated day by day, read after the backtest finishes)
         self.log = []
+        self.last_cvar_budget = None
+        self.last_cvar_used = None
+
+    def _compute_budget(self, R, ratio, beta_t):
+        """Tail-risk budget for the current day, or None to disable the CVaR constraint.
+
+        The base `mpc_selfcal` returns None, so its behaviour is byte-for-byte unchanged.
+        `mpc_tailbudget` overrides this to return a vol-scaled budget shrunk by beta_t.
+        """
+        return None
 
     def decide(self, hist, w_prev):
         if len(hist) < self.lookback:
@@ -148,6 +160,7 @@ class MPCSelfCalStrategy(MPCStrategy):
         exposure, vol_cap = tighten_limits(ratio, self.max_exposure, self.vol_cap,
                                            beta_t, self.t["min_exposure"])
 
+        budget = self._compute_budget(R, ratio, beta_t)
         self.log.append({
             "beta": float(beta_t),
             "uncertainty_ratio": float(ratio),
@@ -155,9 +168,13 @@ class MPCSelfCalStrategy(MPCStrategy):
             "disagreement": float(dis),
             "exposure_cap": float(exposure),
             "breach_freq": self.beta_state.breach_frequency(),
+            "cvar_budget": budget,
+            "cvar_used": None,          # filled in by the subclass after the solve
         })
-        return self.ctrl.solve(w_prev, mu, cov, halfwidth=hw, kappa=self.kappa,
-                               max_exposure=exposure, vol_cap=vol_cap)
+        w = self.ctrl.solve(w_prev, mu, cov, halfwidth=hw, kappa=self.kappa,
+                            max_exposure=exposure, vol_cap=vol_cap, cvar_budget=budget)
+        self.log[-1]["cvar_used"] = (None if budget is None else self.ctrl.last_cvar)
+        return w
 
     def observe(self, realized_r, net_return, target, w_prev_drift):
         """Settle the just-realized day: advance beta_t for use from tomorrow on."""
@@ -168,3 +185,50 @@ class MPCSelfCalStrategy(MPCStrategy):
 
     def breach_frequency(self, window: int | None = None) -> float:
         return self.beta_state.breach_frequency(window)
+
+
+class MPCTailBudgetStrategy(MPCSelfCalStrategy):
+    """SELF-CALIBRATING UNCERTAINTY-AWARE MPC FOR TAIL-RISK BUDGETING (mpc_tailbudget).
+
+    This is the flagship strategy behind the paper's title. It changes exactly ONE thing
+    relative to `mpc_selfcal`: instead of tightening the mean-exposure cap (a blunt, scalar
+    instrument), it imposes a HARD cap on the daily CVaR of the loss - the tail-risk BUDGET -
+    via the Rockafellar-Uryasev epigraph in `MPCController.solve`. Everything else (conformal
+    intervals, the learned beta_t, the uncertainty ratio, costs) is inherited unchanged.
+
+    budget_t = vol_mult * sigma_t * scale_t,
+    scale_t = 1 / (1 + beta_t * max(ratio_t - 1, 0))   (floored at min_scale)
+
+    * sigma_t is the std of equal-weight daily returns over the lookback: a no-look-ahead,
+      vol-denominated budget that is stable across regimes (realized CVaR/vol is ~2.0-2.17).
+    * beta_t is the learned self-calibration coefficient, and `ratio_t` the conformal/
+      ensemble uncertainty ratio, so wide intervals or breaches both shrink the budget.
+
+    The budget sits just below the observed CVaR/vol, so it is a LIVE constraint at full
+    investment rather than a permanently slack one (the failure mode flagged in
+    docs/experiment_log.md for large risk_aversion).
+
+    NO LOOK-AHEAD: sigma_t is computed from `R = hist.values[-lookback:]` (the trailing window
+    only); beta_t is settled through day t-1; the scenario shocks are fixed by seed.
+    """
+
+    def __init__(self, cfg, n_assets, name="mpc_tailbudget", seed=0):
+        super().__init__(cfg, n_assets, name=name, seed=seed)
+        cb = cfg["cvar_budget"]
+        self.vol_mult = float(cb["vol_mult"])
+        self.cb_alpha = float(cb["alpha"])
+        self.cb_scenarios = int(cb["n_scenarios"])
+        self.cb_min_scale = float(cb["min_scale"])
+        # scenario seed is fixed and strategy-specific -> reproducible, still no look-ahead
+        self.cb_seed = seed + 9973
+
+    def _compute_budget(self, R, ratio, beta_t):
+        sigma_t = float(np.std(R.mean(axis=1)))            # trailing equal-weight vol
+        if sigma_t <= 0:
+            return None
+        base = self.vol_mult * sigma_t
+        scale = cvar_budget_scale(ratio, beta_t, self.cb_min_scale)
+        budget = base * scale
+        self.last_cvar_budget = float(budget)
+        return float(budget)
+

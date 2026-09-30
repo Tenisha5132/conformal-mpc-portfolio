@@ -68,6 +68,20 @@ selfcal:
   delta: 0.01          # target daily breach frequency beta is driven toward
   eta: 0.05            # step size of the beta update
 
+# TAIL-RISK BUDGET (mpc_tailbudget): a hard CVaR cap on the DAILY loss, imposed as a
+# Rockafellar-Uryasev epigraph so the MPC stays a QP. The budget is denominated in units of
+# trailing market vol: budget = vol_mult * sigma_t, sigma_t = std of equal-weight daily returns
+# over the lookback (no look-ahead). This makes the budget regime-robust - the realized
+# CVaR/vol ratio is ~2.0-2.17 in both train and val - and vol_mult is calibrated on TRAIN only.
+# The learned beta_t and uncertainty ratio then scale it DOWN like tighten_limits, but on the
+# TAIL instead of the mean. vol_mult=1.6 sits just below the observed ~2.0 so the constraint
+# binds at full investment and is a live budget rather than permanently slack.
+cvar_budget:
+  vol_mult: 1.6         # base_budget = vol_mult * sigma_t (TRAIN-calibrated)
+  alpha: 0.05           # tail level: worst 5% of days
+  n_scenarios: 200      # fixed Gaussian scenarios (fixed seed -> stays a QP)
+  min_scale: 0.2        # floor on the tightening scale so the budget cannot collapse to 0
+
 # Forecast ensemble used for the disagreement signal. GRU is included only when torch is
 # importable, so the ensemble degrades gracefully on a torch-free machine.
 ensemble:
@@ -151,4 +165,4 @@ bootstrap:
   n_resamples: 2000
   confidence: 0.95
   # Paired differences are reported against these two references.
-  reference_strategies: [equal_weight_voltarget, mpc_naive]
+  reference_strategies: [equal_weight_voltarget, mpc_naive, mpc_selfcal]

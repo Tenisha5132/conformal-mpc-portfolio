@@ -293,3 +293,81 @@ rate; asyymmetric step sizes; variance-shift convergence to `delta`; geometric-m
 torch-free degradation; zero disagreement for identical models; **no look-ahead** via the shared
 `check_no_lookahead` harness plus an explicit assertion that `decide()` never mutates `beta`;
 costs charged; one log row per decision.
+
+## 2026-10-01 — `mpc_tailbudget`: the title mechanism actually implemented
+
+The paper title claims **tail-risk budgeting**. Until now nothing in the objective had a
+tail term: `src/mpc.py` maximized mean return minus a quadratic variance penalty minus
+turnover. `kappa` shrinks the *mean* by a half-width (a worst-case-mean box adjustment),
+which is not a tail risk measure. So "budgeting" was aspirational.
+
+Added: a hard cap on the daily CVaR(5%) of the loss, via the Rockafellar & Uryasev epigraph
+
+    min_eta { eta + 1/(alpha(1-alpha)) * E[(L-eta)_+] }  <=  budget
+
+imposed as a CONSTRAINT with `eta` free, over a fixed 200-scenario Gaussian set
+(`scenario_returns`, `r = mu + chol(cov) z`, `z` drawn once from a fixed seed). Because the
+shocks are fixed, the path loss is LINEAR in `w`, so this adds only linear constraints and
+keeps the problem a **QP** — it does not become an SOCP. CLARABEL with tight tolerances is
+used for the budget path; the default solver returns `optimal_inaccurate` and *violates* the
+budget by ~20%.
+
+Budget: `budget_t = vol_mult * sigma_t * scale_t`, `sigma_t` = trailing equal-weight vol over
+the lookback (no look-ahead), `scale_t = 1/(1 + beta_t*max(ratio_t-1,0))` — the same learned
+`beta_t` and uncertainty ratio as `mpc_selfcal`, applied to the TAIL instead of the mean.
+`vol_mult=1.6` is TRAIN-calibrated: realized CVaR/vol is ~2.0–2.17 in both train and val, so
+1.6 sits just below the normal level and the constraint is LIVE at full investment rather
+than permanently slack (the `risk_aversion>=20` failure mode already in this log).
+
+`mpc_tailbudget` differs from `mpc_selfcal` in exactly ONE line: the `_compute_budget` hook.
+Everything else (conformal, ensemble, beta_t, costs) is inherited, so the ablation is clean.
+
+### Three bugs hit on the way (all silent)
+
+1. **`cvar_of_paths` sign error.** Used `quantile(alpha)` and took `losses >= q`, which
+   measures the BEST-case tail. For `loss = -return` the threshold is the `(1-alpha)`
+   quantile and the tail is the upper end. Symptom: the budget never bound and utilization
+   sat at a constant -0.00001 regardless of budget.
+2. **Missing `1/S`.** The R-U term is `1/(alpha(1-alpha)) * E[(L-eta)_+]` where `E` is the
+   empirical MEAN. Omitting `1/S` inflated the term 200x, so the solver returned
+   `optimal_inaccurate` and produced solutions ~20% OVER budget. Fixed and asserted in
+   `test_budget_is_respected_when_it_binds`.
+3. **Infeasible-budget fallback returned `w0`**, i.e. fully invested — the exact opposite of
+   risk-off. Now returns CASH, but ONLY on the budget path; the legacy no-budget path still
+   holds `w0` so existing strategies are byte-for-byte unchanged.
+
+### Result (validation 2016-2019, real NSE, 10 bps, bootstrap 2000 blocks)
+
+| strategy | Sharpe | ann vol | CVaR 5% | maxDD | turnover |
+|---|---|---|---|---|---|
+| equal_weight_voltarget | 1.302 | 0.1050 | **-0.0131** | -10.7% | 0.014 |
+| mpc_fc_tight | 1.073 | 0.1175 | -0.0163 | -14.7% | 0.033 |
+| mpc_selfcal | 1.091 | 0.1204 | -0.0166 | -15.2% | 0.036 |
+| **mpc_tailbudget** | **1.196** | **0.1113** | **-0.0150** | **-14.6%** | 0.036 |
+
+Budget diagnostics: mean budget 0.01387, **binding on 54.2% of days**, mean utilization
+0.869, **0 violations in 983 days** (max util 0.995).
+
+Paired bootstrap, `mpc_tailbudget - mpc_selfcal` (the one-line ablation):
+
+| metric | diff | 95% CI | p | sig |
+|---|---|---|---|---|
+| CVaR 5% | +0.00159 | [0.00101, 0.00214] | 0.001 | **YES** |
+| Sharpe | +0.105 | [-0.072, 0.279] | 0.237 | no |
+| maxDD | +0.0059 | [-0.0057, 0.0388] | 0.184 | no |
+
+**The tail-risk budget beats the exposure cap on the tail, significantly, and that is exactly
+the prediction the mechanism makes.** Sharpe/drawdown are not significantly different.
+
+### What is still NOT claimed
+
+- It does **not** beat `equal_weight_voltarget` on CVaR (diff -0.0019, p=0.082). The simple
+  volatility-targeted baseline remains the hardest thing to beat on tails, and no MPC variant
+  is best on Sharpe or CVaR. Honest claim: the budget is the best of the MPC family on tails,
+  and it is the mechanism that finally makes "tail-risk budgeting" literally true.
+- `docs/hypothesis.md` remains FALSIFIED as written: "at matched annualized volatility...
+  lower CVaR than volatility-targeted equal-weight" is still false. Rewriting it is a
+  separate decision and was NOT done here.
+- vol_mult was fixed from TRAIN and never tuned on val. Do not tune it on val returns.
+- `beta_t` alone is inert (scale uses `max(ratio-1,0)`, so beta with ratio=1 does nothing);
+  the levers are multiplicative, matching `tighten_limits`.

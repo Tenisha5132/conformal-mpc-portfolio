@@ -17,12 +17,12 @@ from src.baselines import (BuyAndHold, EqualWeight, EqualWeightVolTarget, Markow
                            MPCDrawdownRiskAversion)
 from src.data import download_prices, make_synthetic_prices, period_bounds, to_returns
 from src.metrics import compute_metrics, set_trading_days
-from src.strategies import MPCSelfCalStrategy, MPCStrategy
+from src.strategies import MPCSelfCalStrategy, MPCTailBudgetStrategy, MPCStrategy
 from src.utils import load_config, make_run_dir, save_config, set_seed
 
 ALL = ["equal_weight", "buy_hold", "markowitz", "equal_weight_voltarget", "mpc_naive",
        "mpc_dd_riskaversion", "mpc_fc", "mpc_fc_robust", "mpc_fc_tight", "mpc_selfcal",
-       "mpc_full"]
+       "mpc_tailbudget", "mpc_full"]
 
 
 def build(name, cfg, n):
@@ -49,6 +49,8 @@ def build(name, cfg, n):
     }.get(name)
     if name == "mpc_selfcal":
         return MPCSelfCalStrategy(cfg, n, name=name, seed=cfg["seed"])
+    if name == "mpc_tailbudget":
+        return MPCTailBudgetStrategy(cfg, n, name=name, seed=cfg["seed"])
     return MPCStrategy(cfg, n, name=name, seed=cfg["seed"], **flags)
 
 
@@ -109,6 +111,23 @@ def main():
             print(f"  [selfcal] breach_freq={d['realized_breach_frequency']:.4f} "
                   f"(target delta={d['target_delta']})  beta final={d['beta_final']:.4f} "
                   f"mean={d['beta_mean']:.4f} max={d['beta_max']:.4f}")
+        # tail-risk budget diagnostics (mpc_tailbudget): is the CVaR constraint live?
+        if hasattr(strat, "last_cvar_budget") and len(strat.log):
+            import pandas as pd
+            bud = np.array([r.get("cvar_budget") for r in strat.log], dtype=float)
+            used = np.array([r.get("cvar_used") for r in strat.log], dtype=float)
+            ok = np.isfinite(bud) & np.isfinite(used) & (bud > 0) & (used > 0)
+            live = used[ok] / bud[ok]
+            if ok.any():
+                diagnostics.setdefault(name, {})
+                diagnostics[name].update({
+                    "cvar_budget_mean": float(bud[ok].mean()),
+                    "budget_binding_freq": float(np.mean(live > 0.98)),
+                    "budget_util_mean": float(live.mean()),
+                })
+                d = diagnostics[name]
+                print(f"  [budget]  mean_budget={d['cvar_budget_mean']:.5f}  "
+                      f"binding_freq={d['budget_binding_freq']:.3f}  util={d['budget_util_mean']:.3f}")
         print(f"{name:15s} sharpe={rows[name]['sharpe']:.2f}  maxDD={rows[name]['max_drawdown']:.1%}"
               f"  ret={rows[name]['ann_return']:.1%}  turnover={rows[name]['avg_daily_turnover']:.3f}")
     if diagnostics:

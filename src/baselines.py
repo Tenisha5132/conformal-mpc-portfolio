@@ -91,6 +91,44 @@ class EqualWeightVolTarget:
         if w.sum() > self.max_exposure:
             w = w * (self.max_exposure / w.sum()) if w.sum() > 0 else w_eq
         return w
+
+
+class EqualWeightVolTargetFwd:
+    """Volatility-targeted equal weight driven by a FORWARD-LOOKING risk signal.
+
+    This is the matched-information control for the paper's forward-volatility experiment.
+    `equal_weight_voltarget` estimates volatility on a trailing 60-day window, so when a jump
+    happens it de-risks late. This variant substitutes the GARCH one-step conditional
+    volatility from `src/fwdvol.py`, which reacts to the most recent shock.
+
+    The point of this class is FAIRNESS. If only the MPC received the forward-looking signal,
+    any "win" would only show that a good signal beats no signal. Giving the scalar rule the
+    SAME signal isolates what the MPC adds on top of the signal itself.
+    """
+
+    name = "equal_weight_voltarget_fwd"
+
+    def __init__(self, vol_target=0.10, max_exposure=1.0, vol_max_scale=2.5,
+                 trading_days=252, **fwd_kwargs):
+        self.vol_target = float(vol_target)
+        self.max_exposure = float(max_exposure)
+        self.vol_max_scale = float(vol_max_scale)
+        self.trading_days = int(trading_days)
+        from src.fwdvol import FwdVolForecaster
+        self.fwd = FwdVolForecaster(trading_days=trading_days, **fwd_kwargs)
+
+    def decide(self, hist: pd.DataFrame, w_prev: np.ndarray) -> np.ndarray:
+        n = hist.shape[1]
+        w_eq = np.full(n, 1.0 / n)
+        sigma = self.fwd.decide_sigma(hist)          # annualized, same units as the target
+        s = 1.0 if (sigma <= 1e-9 or not np.isfinite(sigma)) else self.vol_target / sigma
+        s = float(np.clip(s, 1.0 / self.vol_max_scale, self.vol_max_scale))
+        w = w_eq * s
+        if w.sum() > self.max_exposure:
+            w = w * (self.max_exposure / w.sum()) if w.sum() > 0 else w_eq
+        return w
+
+
 class MPCDrawdownRiskAversion:
     """Naive-mean MPC whose risk aversion is raised while the strategy is in drawdown.
 

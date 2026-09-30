@@ -135,7 +135,7 @@ class MPCSelfCalStrategy(MPCStrategy):
             return hist_mu
         return self.mu_shrink * pred + (1 - self.mu_shrink) * hist_mu
 
-    def _compute_budget(self, R, ratio, beta_t):
+    def _compute_budget(self, R, ratio, beta_t, hist=None):
         """Tail-risk budget for the current day, or None to disable the CVaR constraint.
 
         The base `mpc_selfcal` returns None, so its behaviour is byte-for-byte unchanged.
@@ -173,7 +173,7 @@ class MPCSelfCalStrategy(MPCStrategy):
         exposure, vol_cap = tighten_limits(ratio, self.max_exposure, self.vol_cap,
                                            beta_t, self.t["min_exposure"])
 
-        budget = self._compute_budget(R, ratio, beta_t)
+        budget = self._compute_budget(R, ratio, beta_t, hist)
         self.log.append({
             "beta": float(beta_t),
             "uncertainty_ratio": float(ratio),
@@ -226,7 +226,8 @@ class MPCTailBudgetStrategy(MPCSelfCalStrategy):
     only); beta_t is settled through day t-1; the scenario shocks are fixed by seed.
     """
 
-    def __init__(self, cfg, n_assets, name="mpc_tailbudget", seed=0, use_forecast=True):
+    def __init__(self, cfg, n_assets, name="mpc_tailbudget", seed=0, use_forecast=True,
+                 fwd_vol=False):
         super().__init__(cfg, n_assets, name=name, seed=seed)
         cb = cfg["cvar_budget"]
         self.vol_mult = float(cb["vol_mult"])
@@ -239,10 +240,29 @@ class MPCTailBudgetStrategy(MPCSelfCalStrategy):
         # return forecast from the objective while keeping the tail-risk budget and the
         # whole uncertainty/self-calibration loop. See _blend_mu.
         self.use_forecast = use_forecast
+        # `fwd_vol=True` is the FORWARD-LOOKING variant (mpc_tailbudget_fwdvol): denominate
+        # the budget in the GARCH one-step conditional volatility instead of trailing vol, so
+        # the budget is set from forecast risk rather than from stale realized risk. This is
+        # the only mechanism that could plausibly beat a vol-targeting rule on a jump, which
+        # is exactly where the trailing-vol budget loses (docs/experiment_log.md).
+        self.fwd_vol = bool(fwd_vol)
+        self._fwd = None
+        if self.fwd_vol:
+            from src.fwdvol import FwdVolForecaster
+            self._fwd = FwdVolForecaster(**cfg["fwdvol"])
 
-    def _compute_budget(self, R, ratio, beta_t):
-        sigma_t = float(np.std(R.mean(axis=1)))            # trailing equal-weight vol
-        if sigma_t <= 0:
+    def _compute_budget(self, R, ratio, beta_t, hist=None):
+        if self.fwd_vol:
+            # Forward-looking denominator: annual 1-step conditional vol / sqrt(252) puts it
+            # in the same DAILY units as the trailing std below, so vol_mult keeps its
+            # TRAIN-calibrated meaning and the constraint stays a like-for-like comparison.
+            if hist is None:
+                sigma_t = float(np.std(R.mean(axis=1)))
+            else:
+                sigma_t = self._fwd.decide_sigma(hist) / np.sqrt(self._fwd.trading_days)
+        else:
+            sigma_t = float(np.std(R.mean(axis=1)))        # trailing equal-weight vol
+        if sigma_t <= 0 or not np.isfinite(sigma_t):
             return None
         base = self.vol_mult * sigma_t
         scale = cvar_budget_scale(ratio, beta_t, self.cb_min_scale)

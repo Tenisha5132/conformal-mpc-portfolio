@@ -13,7 +13,8 @@ import numpy as np
 import pandas as pd
 
 from src.backtest import run_backtest
-from src.baselines import (BuyAndHold, EqualWeight, EqualWeightVolTarget, Markowitz,
+from src.baselines import (BuyAndHold, EqualWeight, EqualWeightVolTarget,
+                           EqualWeightVolTargetFwd, Markowitz,
                            MPCDrawdownRiskAversion)
 from src.data import download_prices, make_synthetic_prices, period_bounds, to_returns
 from src.metrics import compute_metrics, set_trading_days
@@ -22,7 +23,8 @@ from src.utils import load_config, make_run_dir, save_config, set_seed
 
 ALL = ["equal_weight", "buy_hold", "markowitz", "equal_weight_voltarget", "mpc_naive",
        "mpc_dd_riskaversion", "mpc_fc", "mpc_fc_robust", "mpc_fc_tight", "mpc_selfcal",
-       "mpc_tailbudget", "mpc_tailbudget_nofc", "mpc_full"]
+       "mpc_tailbudget", "mpc_tailbudget_nofc", "mpc_tailbudget_fwdvol",
+       "equal_weight_voltarget_fwd", "mpc_full"]
 
 
 def build(name, cfg, n):
@@ -34,6 +36,13 @@ def build(name, cfg, n):
     if name == "markowitz":
         return Markowitz(bt["lookback"], m["risk_aversion"], m["max_weight"], m["cov_shrink"],
                          m["max_exposure"])
+    if name == "equal_weight_voltarget_fwd":
+        # matched-information control: the SAME forward-looking signal as
+        # mpc_tailbudget_fwdvol, but as a plain scalar vol-target rule.
+        bl = cfg["baselines"]
+        return EqualWeightVolTargetFwd(bl["vol_target"], m["max_exposure"],
+                                       bl["vol_max_scale"], bt["trading_days"],
+                                       **cfg["fwdvol"])
     if name == "equal_weight_voltarget":
         bl = cfg["baselines"]
         return EqualWeightVolTarget(bl["vol_target"], bl["vol_lookback"], m["max_exposure"],
@@ -54,6 +63,12 @@ def build(name, cfg, n):
     if name == "mpc_tailbudget_nofc":
         # isolating control: budget ON, return forecast OFF
         return MPCTailBudgetStrategy(cfg, n, name=name, seed=cfg["seed"], use_forecast=False)
+    if name == "mpc_tailbudget_fwdvol":
+        # budget denominated in the GARCH 1-step conditional vol instead of trailing vol.
+        # Return forecast OFF, so this differs from mpc_tailbudget_nofc ONLY in the risk
+        # denominator - the clean test of whether a forward-looking signal helps.
+        return MPCTailBudgetStrategy(cfg, n, name=name, seed=cfg["seed"],
+                                     use_forecast=False, fwd_vol=True)
     return MPCStrategy(cfg, n, name=name, seed=cfg["seed"], **flags)
 
 

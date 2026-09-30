@@ -26,6 +26,8 @@ experiments/run_all.py | tests/
 equal_weight, buy_hold, markowitz, equal_weight_voltarget, mpc_dd_riskaversion, mpc_naive, mpc_fc,
 mpc_fc_robust, mpc_fc_tight (core), mpc_selfcal (learned beta), mpc_tailbudget (CVaR budget,
 the paper-title mechanism), mpc_tailbudget_nofc (same, forecast removed = isolating control),
+mpc_tailbudget_fwdvol (budget denominated in GARCH 1-step conditional vol) + the
+MATCHED-INFORMATION baseline equal_weight_voltarget_fwd (same GARCH signal, scalar rule),
 mpc_full (+regime)
 Source of truth is `ALL` in experiments/run_all.py.
 
@@ -101,6 +103,28 @@ Sharpe, Sortino, max drawdown, annualized return/vol, CVaR 5%, turnover, total c
   TRAP: the largest vol jump in the sample is Dec-2019->Mar-2020 (COVID, x6.94) = SEALED TEST.
   `find_real_jump_window` takes a mandatory `search_end` bound; do not remove it, and keep
   tests/test_regime_test.py::test_jump_search_never_reaches_past_the_bound.
+- FALSIFIED (2026-10-01, fourth record, option 2): a FORWARD-LOOKING risk signal does not save
+  the MPC. src/fwdvol.py = jump-augmented GARCH(1,1)-t, MLE via scipy (no new dep). TRAIN-ONLY
+  1-step-ahead corr(fwdvol,|r_t+1|) .188 vs trailing .170, but Spearman .091 vs .130 (WORSE) -
+  on real NSE returns GARCH is only a marginal improvement, unlike on synthetic GARCH data
+  where it looks great. THE KEY RESULT IS THE MATCHED-INFORMATION PAIR
+  (equal_weight_voltarget_fwd, same GARCH signal, scalar rule):
+    full val CVaR: voltarget_fwd .0117 < voltarget .0131 < mpc_nofc .0148 < mpc_fwdvol .0156
+  The forward signal makes the SIMPLE rule better (4/5 jump events) and the MPC WORSE
+  (2/5, mean +0.0029 vs matched scalar). The MPC DILUTES a good signal: the best risk
+  controller in the study is the dumbest one. Fourth falsification; title unrescuable.
+  TRAPS (all four produced a worthless signal while looking plausible - do not reintroduce):
+  (a) negloglik sign inverted -> optimizer MAXIMIZED the loss and returned its start point;
+  (b) _pack exponentiated omega AND nu -> nu=8 became e^8; only alpha/beta are log-parameterized;
+  (c) jump term must MULTIPLY the shock, not be added (adding ~1.0 to a 1e-3 variance pins the
+      forecast at the cap); (d) OFF-BY-ONE in the forecast recursion - range(len(e)-1) never
+      propagated the newest return, so h_{t+1} ignored the very shock it must react to and the
+      forecast was bit-identical for 0.5sd and 3sd shocks. Also: L-BFGS-B walks a good grid point
+      onto the alpha/beta LOWER BOUNDS (better objective, degenerate flat model) - rejected by
+      an explicit at-bound guard, see tests/test_fwdvol.py.
+  No-look-ahead test gotcha: the fit window is r[-lookback:], so to test look-ahead both
+  histories must be >= lookback long, else the shorter one fits fewer rows. And below min_obs
+  the forecaster silently takes a realized-vol fallback, comparing two different estimators.
 - DATA POLICY: reported numbers come from real NSE prices only (10 tickers, cached in data/raw).
   The simulated generator (cfg['synthetic']) exists solely so the test suite runs offline; every
   one of its parameters is in the config, and the runner prints a warning banner on synthetic runs.

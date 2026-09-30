@@ -22,6 +22,21 @@ synthetic:
   vol_stress: 0.024
   drift: 0.0004           # unconditional daily market drift
 
+# Forward-looking risk signal (src/fwdvol.py): a jump-augmented GARCH(1,1)-t fitted by MLE
+# on a trailing window, giving a 1-step conditional volatility. Used both by the MPC
+# (mpc_tailbudget_fwdvol) and by the matched-information baseline
+# (equal_weight_voltarget_fwd), so the comparison is at EQUAL information.
+# NOTE: on real NSE data this signal is only ~tied with trailing vol on 1-step-ahead
+# correlation (0.188 vs 0.170) and WORSE on rank correlation. Do not assume it is an upgrade.
+fwdvol:
+  lookback: 1000         # trailing window for the GARCH fit
+  refit_every: 20        # re-estimate every N new observations (cheap and stable)
+  jump_quantile: 0.975   # |return| above this quantile flags a jump day
+  jump_scale: 3.0        # extra shock variance multiplier on a jump day
+  min_obs: 250           # below this, fall back to realized vol
+  vol_floor: 0.02        # annualized clamps, keep the scale well-posed
+  vol_cap: 1.5
+
 # Regime testbed (OFFLINE MECHANISM FIXTURE - never reportable). A deterministic block
 # schedule of calm -> volatility spike -> decay, to test whether a tail-risk budget beats a
 # volatility-targeting rule when vol jumps and mean-reverts. See src/data.make_regime_prices.
